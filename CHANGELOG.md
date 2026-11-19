@@ -6,7 +6,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
-## [0.1.0] - Unreleased
+## [0.1.0] - 2026-11-19
 
 The first release: the renderer, the reconciler and the bootstrap and onboarding commands, packaged as an npm dependency that an orchestrator repository installs at a release tag.
 
