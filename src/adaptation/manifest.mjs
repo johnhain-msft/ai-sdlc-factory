@@ -24,7 +24,7 @@ export class ManifestError extends Error {
 const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const realpath = (target) => {
   try {
-    return fs.realpathSync(target);
+    return (fs.realpathSync.native ?? fs.realpathSync)(target);
   } catch {
     return path.resolve(target);
   }
