@@ -1,0 +1,572 @@
+---
+on:
+  workflow_dispatch:
+    inputs:
+      correlation_id:
+        description: Correlation id that links the dispatch, the run and any failure issue
+        type: string
+      upstream_repo:
+        description: Upstream repository (owner/name) whose revision is cascaded
+        type: string
+      previous_sha:
+        description: Previously merged upstream revision (40 lowercase hexadecimal characters)
+        type: string
+      upstream_sha:
+        description: Upstream revision to cascade (40 lowercase hexadecimal characters)
+        type: string
+      upstream_etag:
+        description: ETag of the upstream poll that observed upstream_sha
+        type: string
+      upstream_pr_number:
+        description: Number of the merged upstream pull request, or empty
+        type: string
+      downstream_repo:
+        description: Downstream repository (owner/name) that receives the pull request
+        type: string
+      sync_scope:
+        description: Which part of the downstream surface to adapt
+        type: string
+      on_commit_only_advance:
+        description: "Behaviour when only the upstream commit advanced: noop or bump-provenance"
+        type: string
+      dry_run:
+        description: Empty, true or false; true forbids commits and pull requests
+        type: string
+  bots:
+    - example-orchestrator[bot]
+concurrency:
+  group: sdlc-state-lab-content
+  cancel-in-progress: false
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+engine:
+  id: copilot
+  env:
+    COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+network:
+  allowed:
+    - api.github.com
+checkout:
+  - repository: example-org/hub
+    path: hub
+    current: true
+    github-app:
+      client-id: ${{ vars.APP_CLIENT_ID }}
+      private-key: ${{ secrets.APP_PRIVATE_KEY }}
+      repositories:
+        - hub
+  - repository: example-org/lab-content
+    path: upstream/lab-content
+    ref: ${{ inputs.upstream_sha }}
+    fetch-depth: 0
+    github-app:
+      client-id: ${{ vars.APP_CLIENT_ID }}
+      private-key: ${{ secrets.APP_PRIVATE_KEY }}
+      repositories:
+        - lab-content
+steps:
+  - name: Set up Node.js 24
+    uses: actions/setup-node@v4
+    with:
+      node-version: "24"
+  - name: Install dependencies (root)
+    run: npm ci --include=dev
+    working-directory: hub
+  - name: Install dependencies (apps/site)
+    run: npm ci --include=dev
+    working-directory: hub/apps/site
+  - name: Install the browser of the end-to-end tests
+    run: npx playwright install --with-deps chromium
+    working-directory: hub
+pre-agent-steps:
+  - name: Mint the factory read token
+    id: factory_token
+    uses: actions/create-github-app-token@v2
+    with:
+      app-id: ${{ vars.APP_CLIENT_ID }}
+      private-key: ${{ secrets.APP_PRIVATE_KEY }}
+      owner: example-org
+      repositories: ai-sdlc-factory
+      permission-contents: read
+  - name: Install the factory
+    env:
+      GIT_TERMINAL_PROMPT: "0"
+      GIT_CONFIG_COUNT: "3"
+      GIT_CONFIG_KEY_0: url.https://x-access-token:${{ steps.factory_token.outputs.token }}@github.com/example-org/ai-sdlc-factory.insteadOf
+      GIT_CONFIG_VALUE_0: ssh://git@github.com/example-org/ai-sdlc-factory
+      GIT_CONFIG_KEY_1: url.https://x-access-token:${{ steps.factory_token.outputs.token }}@github.com/example-org/ai-sdlc-factory.insteadOf
+      GIT_CONFIG_VALUE_1: git@github.com:example-org/ai-sdlc-factory
+      GIT_CONFIG_KEY_2: url.https://x-access-token:${{ steps.factory_token.outputs.token }}@github.com/example-org/ai-sdlc-factory.insteadOf
+      GIT_CONFIG_VALUE_2: https://github.com/example-org/ai-sdlc-factory
+    run: npm ci --ignore-scripts
+  - name: Validate dispatch inputs and checkouts
+    env:
+      CORRELATION_ID: ${{ inputs.correlation_id }}
+      UPSTREAM_REPO_INPUT: ${{ inputs.upstream_repo }}
+      PREVIOUS_SHA: ${{ inputs.previous_sha }}
+      UPSTREAM_SHA: ${{ inputs.upstream_sha }}
+      UPSTREAM_ETAG: ${{ inputs.upstream_etag }}
+      UPSTREAM_PR_NUMBER: ${{ inputs.upstream_pr_number }}
+      DOWNSTREAM_REPO_INPUT: ${{ inputs.downstream_repo }}
+      SYNC_SCOPE: ${{ inputs.sync_scope }}
+      ON_COMMIT_ONLY_ADVANCE: ${{ inputs.on_commit_only_advance }}
+      DRY_RUN: ${{ inputs.dry_run }}
+    run: |-
+      set -euo pipefail
+      fail() { echo "$1" >&2; exit 2; }
+      hex40='^[0-9a-f]{40}$'
+      [[ "$UPSTREAM_SHA" =~ $hex40 ]] || fail "upstream_sha must be 40 lowercase hexadecimal characters"
+      [[ "$PREVIOUS_SHA" =~ $hex40 ]] || fail "previous_sha must be 40 lowercase hexadecimal characters"
+      case "$SYNC_SCOPE" in both|content-only|app-only) ;; *) fail "sync_scope is not accepted by this workflow: $SYNC_SCOPE" ;; esac
+      case "$ON_COMMIT_ONLY_ADVANCE" in noop|bump-provenance) ;; *) fail "on_commit_only_advance must be noop or bump-provenance" ;; esac
+      [ "$DOWNSTREAM_REPO_INPUT" = "example-org/hub" ] || fail "downstream_repo must be example-org/hub"
+      [ "$UPSTREAM_REPO_INPUT" = "example-org/lab-content" ] || fail "upstream_repo must be example-org/lab-content"
+      case "$DRY_RUN" in ""|true|false) ;; *) fail "dry_run must be empty, true or false" ;; esac
+      [ "$(git -C "$GITHUB_WORKSPACE/upstream/lab-content" rev-parse HEAD)" = "$UPSTREAM_SHA" ] || fail "the upstream checkout is not at upstream_sha"
+      git -C "$GITHUB_WORKSPACE/upstream/lab-content" cat-file -e "$PREVIOUS_SHA^{commit}" || fail "the upstream checkout does not contain previous_sha"
+      echo "DRY_RUN=$DRY_RUN" >> "$GITHUB_ENV"
+  - name: Record the base revision and the dispatch evidence
+    env:
+      CORRELATION_ID: ${{ inputs.correlation_id }}
+      UPSTREAM_REPO_INPUT: ${{ inputs.upstream_repo }}
+      PREVIOUS_SHA: ${{ inputs.previous_sha }}
+      UPSTREAM_SHA: ${{ inputs.upstream_sha }}
+      UPSTREAM_ETAG: ${{ inputs.upstream_etag }}
+      UPSTREAM_PR_NUMBER: ${{ inputs.upstream_pr_number }}
+      DOWNSTREAM_REPO_INPUT: ${{ inputs.downstream_repo }}
+      SYNC_SCOPE: ${{ inputs.sync_scope }}
+      ON_COMMIT_ONLY_ADVANCE: ${{ inputs.on_commit_only_advance }}
+      DRY_RUN: ${{ inputs.dry_run }}
+      GH_TOKEN: ${{ github.token }}
+    run: |-
+      set -euo pipefail
+      BASE_SHA="$(git -C "$GITHUB_WORKSPACE/hub" rev-parse HEAD)"
+      mkdir -p /tmp/gh-aw /tmp/gh-aw/agent
+      echo "$BASE_SHA" > /tmp/gh-aw/base-sha.txt
+      { echo "BASE_SHA=$BASE_SHA"; echo "UPSTREAM_SHA=$UPSTREAM_SHA"; echo "PREVIOUS_SHA=$PREVIOUS_SHA"; echo "BRANCH_NAME=sdlc/cascade-lab-to-hub"; echo "UPSTREAM_DIR=$GITHUB_WORKSPACE/upstream/lab-content"; } >> "$GITHUB_ENV"
+      git -C "$GITHUB_WORKSPACE/upstream/lab-content" diff --name-status "$PREVIOUS_SHA" "$UPSTREAM_SHA" > /tmp/gh-aw/agent/upstream-diff.txt
+      node --input-type=module -e 'import { writeFileSync } from "node:fs"; const e = process.env; writeFileSync("/tmp/gh-aw/agent/dispatch-inputs.json", JSON.stringify({ correlation_id: e.CORRELATION_ID, upstream_repo: e.UPSTREAM_REPO_INPUT, previous_sha: e.PREVIOUS_SHA, upstream_sha: e.UPSTREAM_SHA, upstream_etag: e.UPSTREAM_ETAG, upstream_pr_number: e.UPSTREAM_PR_NUMBER, downstream_repo: e.DOWNSTREAM_REPO_INPUT, sync_scope: e.SYNC_SCOPE, on_commit_only_advance: e.ON_COMMIT_ONLY_ADVANCE, dry_run: e.DRY_RUN }, null, 2) + "\n");'
+      if pulls="$(gh api "repos/example-org/hub/pulls?state=open&head=example-org:sdlc/cascade-lab-to-hub" --jq '.[0] // null' 2>/dev/null)"; then
+        printf '%s\n' "$pulls" > /tmp/gh-aw/agent/existing-pr.json
+      else
+        echo null > /tmp/gh-aw/agent/existing-pr.json
+      fi
+  - name: Capture the drift reports
+    working-directory: hub
+    run: |-
+      set -uo pipefail
+      mkdir -p /tmp/gh-aw/agent
+      TARGET_SHA="$UPSTREAM_SHA"
+      LAST_MERGED_SHA="$PREVIOUS_SHA"
+      export TARGET_SHA LAST_MERGED_SHA
+      set +e
+      ( npm run check:inputs -- "$UPSTREAM_DIR" ) > /tmp/gh-aw/agent/preflight-1.txt 2>&1
+      rc1=$?
+      ( node "$GITHUB_WORKSPACE/scripts/check-sources.mjs" --downstream "$GITHUB_WORKSPACE/hub" --upstream "$UPSTREAM_DIR" --commit "$TARGET_SHA" ) > /tmp/gh-aw/agent/preflight-2.txt 2>&1
+      rc2=$?
+      set -e
+      cp /tmp/gh-aw/agent/preflight-1.txt /tmp/gh-aw/agent/input-report.txt
+      cp /tmp/gh-aw/agent/preflight-2.txt /tmp/gh-aw/agent/source-check.txt
+      printf 'preflight exit codes: %s %s\n' "$rc1" "$rc2" > /tmp/gh-aw/agent/preflight-exit-codes.txt
+      for rc in "$rc1" "$rc2"; do
+        if [ "$rc" -ge 2 ]; then echo "a preflight command failed with exit code $rc" >&2; exit 2; fi
+      done
+      if grep -Eq '^[[:space:]]+at[[:space:]]+[^[:space:]]' /tmp/gh-aw/agent/preflight-1.txt /tmp/gh-aw/agent/preflight-2.txt; then echo "a preflight report holds an uncaught-exception stack trace" >&2; exit 2; fi
+  - name: Verify the downstream worktree is read-only so far
+    run: |-
+      set -euo pipefail
+      status="$(git -C "$GITHUB_WORKSPACE/hub" status --porcelain)"
+      if [ -n "$status" ]; then echo "the downstream worktree is not clean:" >&2; echo "$status" >&2; exit 1; fi
+      [ "$(git -C "$GITHUB_WORKSPACE/hub" rev-parse HEAD)" = "$BASE_SHA" ] || { echo "the downstream HEAD moved" >&2; exit 1; }
+post-steps:
+  - name: Record the base and head revisions
+    run: |-
+      set -euo pipefail
+      BASE_SHA="$(cat /tmp/gh-aw/base-sha.txt)"
+      if ! [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then echo "base-sha.txt must hold 40 lowercase hexadecimal characters" >&2; exit 1; fi
+      AGENT_HEAD_SHA="$(git -C "$GITHUB_WORKSPACE/hub" rev-parse HEAD)"
+      cat > /tmp/gh-aw/cascade-shas.json <<EOF
+      {"baseSha":"$BASE_SHA","headSha":"$AGENT_HEAD_SHA"}
+      EOF
+      { echo "BASE_SHA=$BASE_SHA"; echo "AGENT_HEAD_SHA=$AGENT_HEAD_SHA"; } >> "$GITHUB_ENV"
+  - name: Upload the cascade revisions
+    uses: actions/upload-artifact@v4
+    with:
+      name: sdlc-cascade-shas-${{ github.run_id }}
+      path: /tmp/gh-aw/cascade-shas.json
+      if-no-files-found: error
+  - name: node --frozen-intrinsics "$GITHUB_WORKSPACE/node_modules/ai-sdlc-factory/src/verify-immutable-gates.mjs" --downstream "$GITHUB_WORKSPACE/hub" --base "$BASE_SHA" --workflow cascade-ai-lab-to-hub
+    run: node --frozen-intrinsics "$GITHUB_WORKSPACE/node_modules/ai-sdlc-factory/src/verify-immutable-gates.mjs" --downstream "$GITHUB_WORKSPACE/hub" --base "$BASE_SHA" --workflow cascade-ai-lab-to-hub
+  - name: npm run build:content
+    run: npm run build:content
+    working-directory: hub
+  - name: npm run build:views
+    run: npm run build:views
+    working-directory: hub
+  - name: git -C "$GITHUB_WORKSPACE/hub" status --porcelain
+    run: |-
+      set -euo pipefail
+      status="$(git -C "$GITHUB_WORKSPACE/hub" status --porcelain)"
+      if [ -n "$status" ]; then
+        echo "worktree is not clean:" >&2
+        echo "$status" >&2
+        exit 1
+      fi
+    working-directory: hub
+  - name: npm run build
+    run: npm run build
+    working-directory: hub
+  - name: SITE_ORIGIN=https://site.example.com npm run build:catalog
+    run: SITE_ORIGIN=https://site.example.com npm run build:catalog
+    working-directory: hub
+  - name: npm run typecheck
+    run: npm run typecheck
+    working-directory: hub
+  - name: npm run lint
+    run: npm run lint
+    working-directory: hub
+  - name: npm test
+    run: npm test
+    working-directory: hub
+  - name: npm run test:site
+    run: npm run test:site
+    working-directory: hub
+  - name: npx playwright test tests/browser/site.spec.ts
+    run: npx playwright test tests/browser/site.spec.ts
+    working-directory: hub
+  - name: "post-run check: a dry run must not leave a commit"
+    run: |-
+      # post-run check: a dry run must not leave a commit
+      if [ "${DRY_RUN:-}" = "true" ]; then
+        [ "$AGENT_HEAD_SHA" = "$BASE_SHA" ] || { echo "dry_run is true but the agent committed $BASE_SHA..$AGENT_HEAD_SHA" >&2; exit 1; }
+      fi
+    working-directory: hub
+  - name: "post-run check: committed provenance records upstream_sha"
+    run: |-
+      # post-run check: committed provenance records upstream_sha
+      if [ "$AGENT_HEAD_SHA" != "$BASE_SHA" ]; then
+        node --input-type=module -e '
+        import { readFileSync } from "node:fs";
+        const hub = process.env.GITHUB_WORKSPACE + "/hub/";
+        const want = process.env.UPSTREAM_SHA;
+        const load = (name) => {
+          try { return JSON.parse(readFileSync(hub + name, "utf8")); }
+          catch { console.error("provenance file is missing or unparseable: " + name); process.exit(1); }
+        };
+        const recorded = {
+          "provenance.json commit": load("content/pages/provenance.json").commit,
+          "source-inputs.json commit": load("content/pages/source-inputs.json").commit,
+          "sources.json _provenance.commit": (load("apps/site/sources.json")._provenance ?? {}).commit,
+        };
+        const behind = Object.keys(recorded).filter((label) => recorded[label] !== want);
+        if (behind.length > 0) { console.error("stale provenance: " + behind.join(", ")); process.exit(1); }
+        '
+        node "$GITHUB_WORKSPACE/scripts/check-sources.mjs" --downstream "$GITHUB_WORKSPACE/hub" --upstream "$UPSTREAM_DIR" --commit "$UPSTREAM_SHA"
+      fi
+    working-directory: hub
+  - name: "post-run check: the upstream checkout stays read-only"
+    run: |-
+      # post-run check: the upstream checkout stays read-only
+      git -C "$UPSTREAM_DIR" diff --quiet HEAD && test -z "$(git -C "$UPSTREAM_DIR" ls-files --others --exclude-standard)"
+    working-directory: hub
+safe-outputs:
+  github-app:
+    client-id: ${{ vars.APP_CLIENT_ID }}
+    private-key: ${{ secrets.APP_PRIVATE_KEY }}
+    repositories:
+      - ${{ github.event.repository.name }}
+      - hub
+  report-failure-as-issue: false
+  threat-detection:
+    continue-on-error: false
+  create-pull-request:
+    target-repo: example-org/hub
+    title-prefix: "feat(cascade): "
+    labels:
+      - automated
+      - sdlc-cascade
+      - ai-adapted
+      - needs-review
+    reviewers:
+      - example-reviewer
+    draft: false
+    preserve-branch-name: true
+    recreate-ref: true
+    close-older-pull-requests: true
+    close-older-key: sdlc-cascade-lab-to-hub
+    if-no-changes: ignore
+    auto-merge: false
+    fallback-as-issue: false
+    allowed-files:
+      - README.md
+      - content/pages/index.ts
+      - content/pages/p*.ts
+      - content/pages/provenance.json
+      - content/pages/source-inputs.json
+      - public/pages/**
+      - tests/pages.test.ts
+      - apps/site/sources.json
+      - apps/site/README.md
+      - apps/site/client/src/views/*.tsx
+    exclude-lock-yml: true
+    protected-files:
+      policy: blocked
+      exclude:
+        - /README.md
+        - /apps/site/README.md
+    max: 1
+    max-patch-size: 10240
+tools:
+  bash:
+    - cat
+    - date
+    - find
+    - git
+    - grep
+    - head
+    - ls
+    - node
+    - npm
+    - tail
+    - wc
+  edit: {}
+jobs:
+  detection:
+    if: needs.agent.result == 'success'
+  safe_outputs:
+    if: needs.agent.result == 'success'
+  finalize_poll_state:
+    needs:
+      - agent
+      - detection
+      - safe_outputs
+    if: success() && inputs.dry_run != 'true'
+    permissions:
+      issues: write
+    steps:
+      - id: app_token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }},hub
+          permission-contents: read
+          permission-pull-requests: read
+          permission-actions-variables: write
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ steps.app_token.outputs.token }}
+          sparse-checkout: |-
+            /package.json
+            /package-lock.json
+            /sdlc.yaml
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Mint the factory read token
+        id: factory_token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: example-org
+          repositories: ai-sdlc-factory
+          permission-contents: read
+      - name: Install the factory
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+          GIT_CONFIG_COUNT: "3"
+          GIT_CONFIG_KEY_0: url.https://x-access-token:${{ steps.factory_token.outputs.token }}@github.com/example-org/ai-sdlc-factory.insteadOf
+          GIT_CONFIG_VALUE_0: ssh://git@github.com/example-org/ai-sdlc-factory
+          GIT_CONFIG_KEY_1: url.https://x-access-token:${{ steps.factory_token.outputs.token }}@github.com/example-org/ai-sdlc-factory.insteadOf
+          GIT_CONFIG_VALUE_1: git@github.com:example-org/ai-sdlc-factory
+          GIT_CONFIG_KEY_2: url.https://x-access-token:${{ steps.factory_token.outputs.token }}@github.com/example-org/ai-sdlc-factory.insteadOf
+          GIT_CONFIG_VALUE_2: https://github.com/example-org/ai-sdlc-factory
+        run: npm ci --ignore-scripts
+      - uses: actions/download-artifact@v4
+        with:
+          name: sdlc-cascade-shas-${{ github.run_id }}
+          path: /tmp/gh-aw
+      - name: Export the base and head revisions
+        run: |-
+          set -euo pipefail
+          BASE_SHA="$(jq -r .baseSha /tmp/gh-aw/cascade-shas.json)"
+          AGENT_HEAD_SHA="$(jq -r .headSha /tmp/gh-aw/cascade-shas.json)"
+          for value in "$BASE_SHA" "$AGENT_HEAD_SHA"; do
+            [[ "$value" =~ ^[0-9a-f]{40}$ ]] || { echo "cascade-shas.json holds a malformed revision" >&2; exit 1; }
+          done
+          { echo "BASE_SHA=$BASE_SHA"; echo "AGENT_HEAD_SHA=$AGENT_HEAD_SHA"; } >> "$GITHUB_ENV"
+      - name: Update the poll state
+        if: inputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          ISSUES_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPSTREAM_SHA: ${{ inputs.upstream_sha }}
+          CORRELATION_ID: ${{ inputs.correlation_id }}
+          UPSTREAM_ETAG: ${{ inputs.upstream_etag }}
+          REPO_SLUG: LAB_CONTENT
+          BRANCH_NAME: sdlc/cascade-lab-to-hub
+          PROVENANCE_FILE: content/pages/source-inputs.json
+        run: |-
+          node "$GITHUB_WORKSPACE/node_modules/ai-sdlc-factory/src/update-poll-state.mjs" --slug "$REPO_SLUG" --branch "$BRANCH_NAME" --provenance-file "$PROVENANCE_FILE" --base-sha "$BASE_SHA" --head-sha "$AGENT_HEAD_SHA" --target-sha "$UPSTREAM_SHA" --etag "$UPSTREAM_ETAG" > "${RUNNER_TEMP:-/tmp}/poll-state-result.json"
+          cat "${RUNNER_TEMP:-/tmp}/poll-state-result.json"
+          if [ -s "${RUNNER_TEMP:-/tmp}/poll-state-result.json" ]; then
+            node "$GITHUB_WORKSPACE/node_modules/ai-sdlc-factory/src/ai-pull-request-result.mjs" --slug "$REPO_SLUG" --poll-state-result "${RUNNER_TEMP:-/tmp}/poll-state-result.json"
+          fi
+  escalate_failure:
+    needs:
+      - agent
+      - detection
+      - safe_outputs
+    if: failure() && inputs.dry_run != 'true'
+    detection-gate: status-only
+    permissions:
+      issues: write
+    steps:
+      - id: app_token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }},hub
+          permission-contents: read
+          permission-pull-requests: read
+          permission-actions-variables: write
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ steps.app_token.outputs.token }}
+          sparse-checkout: |-
+            /package.json
+            /package-lock.json
+            /sdlc.yaml
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Mint the factory read token
+        id: factory_token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: example-org
+          repositories: ai-sdlc-factory
+          permission-contents: read
+      - name: Install the factory
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+          GIT_CONFIG_COUNT: "3"
+          GIT_CONFIG_KEY_0: url.https://x-access-token:${{ steps.factory_token.outputs.token }}@github.com/example-org/ai-sdlc-factory.insteadOf
+          GIT_CONFIG_VALUE_0: ssh://git@github.com/example-org/ai-sdlc-factory
+          GIT_CONFIG_KEY_1: url.https://x-access-token:${{ steps.factory_token.outputs.token }}@github.com/example-org/ai-sdlc-factory.insteadOf
+          GIT_CONFIG_VALUE_1: git@github.com:example-org/ai-sdlc-factory
+          GIT_CONFIG_KEY_2: url.https://x-access-token:${{ steps.factory_token.outputs.token }}@github.com/example-org/ai-sdlc-factory.insteadOf
+          GIT_CONFIG_VALUE_2: https://github.com/example-org/ai-sdlc-factory
+        run: npm ci --ignore-scripts
+      - name: Record the failure
+        if: inputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          ISSUES_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPSTREAM_SHA: ${{ inputs.upstream_sha }}
+          CORRELATION_ID: ${{ inputs.correlation_id }}
+          REPO_SLUG: LAB_CONTENT
+          BRANCH_NAME: sdlc/cascade-lab-to-hub
+        run: node "$GITHUB_WORKSPACE/node_modules/ai-sdlc-factory/src/update-poll-state.mjs" --record-failure --slug "$REPO_SLUG" --target-sha "$UPSTREAM_SHA" --workflow-id cascade-ai-lab-to-hub
+---
+
+# AI adaptation: lab-to-hub
+
+Adapt the downstream checkout `hub/` of `example-org/hub` to the upstream changes in `example-org/lab-content`. The cumulative range you adapt against is `previous_sha..upstream_sha`; the exact revisions are in `/tmp/gh-aw/agent/dispatch-inputs.json`. Work in this order: read the evidence, decide whether anything must change, make the edits, run the deterministic commands, commit, and only then open the pull request.
+
+## Adaptation instructions
+
+Bring the content pages and the hub views in line with the cumulative upstream change. Start from the reports under /tmp/gh-aw/agent/ (input-report.txt, source-check.txt and upstream-diff.txt) and change only what they support. Read the input report as plain text: its exit code does not tell a drift from a crash. A change is needed when the input report lists changed, new or removed inputs or PROBLEM lines, or when source-check.txt lists a view under changed. Edit the pages (content/pages/index.ts and the p*.ts modules), README.md and tests/pages.test.ts. Keep every page inside the limits of the locked rules module: reading time at the rate that it exports (READING_WPM) and the page word counts (PAGE_WORDS). In tests/pages.test.ts leave the lines above the first describe(, every describe( header and the locked it(...) blocks exactly as they are. Edit the hub views (apps/site/client/src/views/*.tsx) and apps/site/README.md, and leave the locked kernel files alone. The login and runner tests and the kernel sources stay zero-diff.
+
+## Evidence
+
+Read the artifacts under `/tmp/gh-aw/agent/` first. They were captured before you started and are what you know about the upstream change:
+
+- `dispatch-inputs.json`: the ten dispatch inputs verbatim, among them `correlation_id`, `previous_sha`, `upstream_sha` and `on_commit_only_advance`.
+- `upstream-diff.txt`: the changed upstream files of `previous_sha..upstream_sha`, with their status.
+- `existing-pr.json`: the open pull request for the branch of this workflow, or `null`.
+- `input-report.txt` (also `preflight-1.txt`): the output of `npm run check:inputs -- "$UPSTREAM_DIR"`.
+- `source-check.txt` (also `preflight-2.txt`): the output of `node "$GITHUB_WORKSPACE/scripts/check-sources.mjs" --downstream "$GITHUB_WORKSPACE/hub" --upstream "$UPSTREAM_DIR" --commit "$TARGET_SHA"`.
+- `preflight-exit-codes.txt`: the exit codes of those commands. An exit code of 1 is a drift report for you to act on, not a failure.
+
+The variables `UPSTREAM_DIR`, `UPSTREAM_SHA`, `PREVIOUS_SHA`, `BASE_SHA` and `BRANCH_NAME` are exported for you. The upstream checkout `$UPSTREAM_DIR` is read-only: never write to it.
+
+## What to do
+
+1. Decide from the evidence which case applies. When nothing has to be adapted, read `on_commit_only_advance` in `dispatch-inputs.json`: `noop` means that you leave the worktree exactly as it is, with no edit and no commit, so that the run ends without a pull request; `bump-provenance` means that you make no content edit and go to step 3, which records the new revision. Otherwise adapt the downstream as the adaptation instructions say.
+2. Make the edits, changing only the files you may change and never the files you must not change (both lists are below).
+3. Run the deterministic commands below, in their order.
+4. Commit what they and you changed, with the commands that close that block.
+5. Open the pull request (the last section).
+
+## Files you may change
+
+Only these paths (the pull request is refused for any other file):
+
+- `README.md`
+- `content/pages/index.ts`
+- `content/pages/p*.ts`
+- `content/pages/provenance.json`
+- `content/pages/source-inputs.json`
+- `public/pages/**`
+- `tests/pages.test.ts`
+- `apps/site/sources.json`
+- `apps/site/README.md`
+- `apps/site/client/src/views/*.tsx`
+
+## Files you must not change
+
+A difference in any of them fails the verification that runs after you finish, and no pull request is opened:
+
+- `content/rules.ts`
+- `content/types.ts`
+- `kernel`
+- `scripts`
+- `tests/login.test.ts`
+- `tests/runner.test.ts`
+- `apps/site/server/src/index.ts`
+- `apps/site/server/src/sandbox.ts`
+- `apps/site/server/tests/sandbox.test.ts`
+
+The companion test files of the other adaptation workflows are theirs alone:
+
+- `tests/pipelines.test.ts`
+- `tests/course.test.ts`
+
+## Test blocks that stay byte for byte
+
+After you finish, these parts of the test files below are compared with the base revision, and any difference fails the run. Every other test in those files may be edited.
+
+- `tests/pages.test.ts`: the lines before the first `describe(`, every `describe(` header line, and these blocks:
+  - `it("accepts every page of the course without errors or warnings")`
+  - `it("gives every page a heading and a body")`
+  - `it("keeps every page inside the length limits")`
+
+## Deterministic commands
+
+Run these from `$GITHUB_WORKSPACE/hub`, in this order, after your edits. A non-zero exit of any command is a failed run: stop, do not commit, and do not open the pull request. The last two lines commit the result.
+
+```bash
+cd "$GITHUB_WORKSPACE/hub"
+npm run check:inputs -- "$UPSTREAM_DIR" --accept
+node "$GITHUB_WORKSPACE/scripts/check-sources.mjs" --downstream "$GITHUB_WORKSPACE/hub" --upstream "$UPSTREAM_DIR" --commit "$UPSTREAM_SHA" --accept
+npm run build:content
+git add -- README.md apps/site/README.md apps/site/client/src/views apps/site/sources.json content/pages content/pages/index.ts content/pages/provenance.json content/pages/source-inputs.json public/pages tests/pages.test.ts
+git commit -m "feat(cascade): adapt lab-content to $UPSTREAM_SHA"
+```
+
+## Pull request
+
+Only after that commit, call `create_pull_request` with exactly the branch `sdlc/cascade-lab-to-hub`. Its body lists `previous_sha..upstream_sha`, the `correlation_id` of `dispatch-inputs.json`, the adapted content pages and hub views, and anything a reviewer must check by hand.
+
+## Rules
+
+- When no adaptation is required, leave the worktree clean and make no commit, so the run ends without a pull request.
+- When the dispatch input `dry_run` is `true`, do not run `git commit` and do not call `create_pull_request`.
+- Do not edit anything under `upstream/`. The pull request is created only through the safe output; do not publish branches yourself.

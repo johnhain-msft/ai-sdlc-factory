@@ -1,0 +1,6 @@
+node_modules/
+*.tgz
+
+# scratch output of local runs
+.scratch/
+scratch/

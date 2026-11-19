@@ -1,0 +1,1 @@
+`real-output.json` is recorded output of a real `vitest run --reporter=json` (Vitest 3.2.7) over a throwaway three-test fixture (one passed, one skipped, one failed), with the local paths replaced by `/work/...`. The other files are neutral stand-in reports using exactly its field names (`testResults[].name`, `assertionResults[].title`, `ancestorTitles`, `status`).

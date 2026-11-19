@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "prefix": "sdlc-leak-v1:",
+  "maxWindow": 9,
+  "digests": {
+    "15307d96b37d07e4312adc607c58022e3189d01b2b773c0897645f17fb1262c9": {
+      "id": "d23",
+      "category": "other"
+    },
+    "2c0a841a21717728e111f0cba166e97f63098c1346aabf7b5ce76c9b4d27ea53": {
+      "id": "d01",
+      "category": "org"
+    },
+    "3d3c2855110fccd105eaf531e71596eb3e7c9659b9030857346ce636beb4f6db": {
+      "id": "d03",
+      "category": "repo"
+    },
+    "3eec1d1e387c1c9803937119bad2371b8092259e7430643d5f286941da915603": {
+      "id": "d04",
+      "category": "repo"
+    },
+    "4f1320f08cd0926918cbdc72a10c9d15de8f65728d8e90548bc4206816dda410": {
+      "id": "d05",
+      "category": "repo"
+    },
+    "54e42ca98bb1589e49d6a5e6c9181fa488a168c86847334084395d979c4a9721": {
+      "id": "d06",
+      "category": "repo"
+    },
+    "571af5808b3d518fa70c40d6942ba55e86e87e334062f5053a792a20aaaa2f7d": {
+      "id": "d07",
+      "category": "repo"
+    },
+    "5ace25e6b5c00c7b76921de43017cf463de91056ff503fe007fed149f959904c": {
+      "id": "d08",
+      "category": "repo"
+    },
+    "5b8aeeca89d1e579310c709534e46631219e4a2ff20040941f75d795ef0de1a9": {
+      "id": "d09",
+      "category": "repo"
+    },
+    "7f18d616c7d9f0fff807becc48c49c77d53f0ba6f019643d7048ab4de8de74ce": {
+      "id": "d10",
+      "category": "app"
+    },
+    "8180de623592f4a222b7b07a28368186810d8a3559df59d7b85e586a1db5d705": {
+      "id": "d12",
+      "category": "repo"
+    },
+    "83e85bd29764f5d8849b0e767084542bd8dde0bea2086209395403b3313f0d97": {
+      "id": "d13",
+      "category": "handle"
+    },
+    "8a6a97ff6eb657251b7de2e02cc54765c5f40563654ee90918e8f3d0fb7f517d": {
+      "id": "d14",
+      "category": "repo"
+    },
+    "8bbbbc24fd9a6d2236662641ecf71e584e6540966cab70d619fccae2d068b274": {
+      "id": "d15",
+      "category": "org"
+    },
+    "8cd15680060a9f81ff360ea9cd283440898a2cf66f11195ac319917507eaae5a": {
+      "id": "d16",
+      "category": "repo"
+    },
+    "8ec455027de413538ac987b8af9b429842601d122508ff235c6197860cdae61f": {
+      "id": "d17",
+      "category": "repo"
+    },
+    "91f03c5c401cd13b117025d067ba501c9a8f91c9cd823a09eacc3c2aeadfa5ac": {
+      "id": "d18",
+      "category": "repo"
+    },
+    "951aa26824ce8c0c21c1fa38bf8da20852ab660fc6bb26f5f16ebc8db1360ba4": {
+      "id": "d19",
+      "category": "repo"
+    },
+    "9f22ec372e04caafb32275fcd904d2899342edc63f6f2c2988c087bdf5459ace": {
+      "id": "d20",
+      "category": "person"
+    },
+    "b0e03520191d76b3a44203610c6f6ab0f79739c3b564c571e07d848b16d41737": {
+      "id": "d21",
+      "category": "person"
+    },
+    "cc08c4d25a9139b43070b6f0f7186d77301202419451a1e969541c6339a5f01d": {
+      "id": "d22",
+      "category": "other"
+    }
+  }
+}

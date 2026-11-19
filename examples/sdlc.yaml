@@ -1,0 +1,871 @@
+# The reference preset of the AI SDLC factory: a synthetic orchestrator that is built to exercise every feature of the factory.
+#
+# Everything in it is invented: the names (example-org, example-reviewer, example-orchestrator), the schedules, the commands, the constants and the scripts. It does not
+# copy a fleet that anyone runs, and it is not a template to fork. It is the factory's own preset (the fleet that the factory's tests render), the input of the committed
+# render under .github/workflows/ (the golden files) and a worked example for the README. A command or a constant here is a stand-in that shows where one of your own goes.
+#
+# This file is data: the factory turns it into the generated workflows under .github/workflows/. Edit this file (by hand or through `sdlc-onboard`), then run
+# `sdlc-reconcile`; never edit a generated workflow directly. Here the generated workflows are produced by `node tools/update-examples.mjs` (see README.md).
+#
+# `<checkout>` inside any command is replaced by the renderer with the absolute path of the upstream checkout, "$UPSTREAM_DIR"; `<factory>` and `<factory-dir>`
+# are the directory that the factory block below names, as a quoted absolute path and as a path relative to the workspace.
+#
+# A verifyCommands entry whose first non-blank character is `#` (for example "# post-run check: ...") is a post-run check. Every verifyCommands entry runs in the
+# order listed here; a post-run check only stays out of the verification gate that the reconciler reports for the AI adaptation workflows.
+
+# Where the factory package is installed in this repository. The factory repository is private here, so the jobs that install it mint a read token for it.
+factory:
+  package: ai-sdlc-factory
+  source: github:example-org/ai-sdlc-factory
+  private: true
+
+# The sync state variables are written with the canonical field name (downstreamMainSha).
+state:
+  dialect: downstream
+
+# How the dedupe step tells the pull requests of a target's own scheduled workflows apart from a duplicate of the one that it guards.
+dedupe:
+  upkeeps:
+    - id: weekly-audit
+      branchPrefixes:
+        - automation/weekly-audit-
+        - sdlc/weekly-audit-
+      labels:
+        - content-audit
+    - id: self-improve
+      branchPrefixes:
+        - automation/self-improve-
+        - sdlc/self-improve-
+      labels:
+        - self-improving
+  strategyUpkeep:
+    content-and-docs-sync: weekly-audit
+    code-quality-and-improvement-scan: self-improve
+
+# The examples and the wording that the rendered prompts take from this repository.
+prompts:
+  reportExamples:
+    - reports/audit-report.md
+    - reports/improvement-report.md
+  pullRequestBodyItems: the adapted content pages and hub views
+
+onboarding:
+  provenanceNames:
+    - source.json
+    - provenance.json
+
+protectedFilesExclude:
+  - /README.md
+
+projects:
+  # A drift project that installs the target's dependencies for its agent, watches pages on two hosts and builds and tests with npm.
+  - projectKey: docs-site
+    repo: example-org/docs-site
+    defaultBranch: main
+    deconflictInRepoSchedules: none
+    deconflictWorkflowIds: []
+    driftAudit:
+      enabled: true
+      schedule: "15 9 * * 2"
+      upkeepStrategy: content-and-docs-sync
+      instructions: Keep the guides and reference documents of the documentation site current against the watched changelogs and documentation.
+      instructionsFile: instructions/docs-site.md
+      knowledgeSources:
+        watchUrls:
+          - url: https://changelog.example.org/
+            label: Platform changelog
+            kind: changelog
+          - url: https://changelog.example.org/feed/
+            label: Platform changelog feed
+            kind: feed
+          - url: https://changelog.example.org/?label=administration
+            label: Platform changelog, administration
+            kind: changelog
+          - url: https://docs.example.net/platform/releases
+            label: Platform release notes
+            kind: release-notes
+        # The documentation pages that the guides cite, the most cited first: a cited page whose text changed since the previous run is on the agent's work list,
+        # with the files that cite it.
+        citedPages:
+          include:
+            - guides/**/*.md
+            - docs/**/*.md
+          hosts:
+            - docs.example.net
+          maxPages: 60
+        packageManifests:
+          - package.json
+        mcpServers:
+          docs-search:
+            type: http
+            url: https://mcp.example.org/docs
+          context-lookup:
+            command: npx
+            args:
+              - -y
+              - "@example-org/context-mcp@latest"
+      buildCommands:
+        - node scripts/build.mjs
+      verifyCommands:
+        - npm ci
+        - node scripts/build.mjs
+        - test "$(git status --porcelain | wc -l)" -eq 0
+        - npm run test:pages
+        - npm run test:links
+        - npm test -- --silent
+      draft: false
+      reviewers:
+        - example-reviewer
+      # What the agent has inside its sandbox besides git, node and the build command: the target's dependencies (installed before it starts: the sandbox has no
+      # route to the package registry) and the read-only text tools that it uses to compare the snapshots.
+      agentSandbox:
+        installDependencies: true
+        bashCommands:
+          - awk
+          - cd
+          - cut
+          - diff
+          - echo
+          - jq
+          - mkdir
+          - npm
+          - rg
+          - sed
+          - sort
+          - tr
+          - uniq
+
+  # A drift project whose verification gate runs a staged validator: prepare-run stages scripts/validate-example.mjs and the factory's drift-lib before the
+  # agent starts, and the first verification command compares them with the workspace copies and then runs the validator.
+  - projectKey: lab-content
+    repo: example-org/lab-content
+    defaultBranch: main
+    deconflictInRepoSchedules: none
+    deconflictWorkflowIds: []
+    driftAudit:
+      enabled: true
+      schedule: "30 6 * * 4"
+      upkeepStrategy: content-and-docs-sync
+      instructions: Audit the content registry and the lab pages against the watched sources and propose only safe, mechanical updates.
+      instructionsFile: instructions/lab-content.md
+      knowledgeSources:
+        watchUrls:
+          - url: https://changelog.example.org/
+            label: Platform changelog
+            kind: changelog
+          - url: https://changelog.example.org/feed/
+            label: Platform changelog feed
+            kind: feed
+          # The release pages and not their Atom feeds: a feed also lists the bare tags of the repository.
+          - url: https://releases.example.org/runtime/releases
+            label: Runtime releases
+            kind: release-notes
+          - url: https://releases.example.org/cli/releases
+            label: Command-line tool releases
+            kind: release-notes
+        citedPages:
+          include:
+            - README.md
+            - modules/**/*.md
+            - docs/**/*.md
+          hosts:
+            - docs.example.net
+          maxPages: 60
+        packageManifests:
+          - package.json
+          - tools/package.json
+          - "**/*.csproj"
+        mcpServers:
+          docs-search:
+            type: http
+            url: https://mcp.example.org/docs
+          context-lookup:
+            command: npx
+            args:
+              - -y
+              - "@example-org/context-mcp@latest"
+      buildCommands: []
+      stagedScripts:
+        - scripts/validate-example.mjs
+      verifyCommands:
+        - ( set -euo pipefail; copy="${RUNNER_TEMP:?RUNNER_TEMP is not set}/gh-aw/sdlc-validator"; cmp -s "$copy/scripts/validate-example.mjs" "$GITHUB_WORKSPACE/scripts/validate-example.mjs" || { echo "scripts/validate-example.mjs is not the copy that prepare-run made before the agent started" >&2; exit 1; }; cmp -s "$copy/<factory-dir>/package.json" <factory>/package.json || { echo "<factory-dir>/package.json is not the copy that prepare-run made before the agent started" >&2; exit 1; }; diff -rq "$copy/<factory-dir>/src/drift/lib" <factory>/src/drift/lib >&2 || { echo "<factory-dir>/src/drift/lib is not the copy that prepare-run made before the agent started" >&2; exit 1; }; ! test -e "$GITHUB_WORKSPACE/scripts/node_modules" || { echo "scripts/node_modules is not the copy that prepare-run made before the agent started" >&2; exit 1; }; node "$copy/scripts/validate-example.mjs" )
+        - ( set -euo pipefail; for f in tests/catalog-links.test.js tests/page-layout.test.js; do test -f "$f" || { echo "missing required test file $f" >&2; exit 1; }; done; npm ci; npm test )
+      draft: false
+      reviewers: []
+      # The allowlist refused reads that used sed and cut, and the agent gave up writing its audit report. Both only read text and reach nothing.
+      agentSandbox:
+        bashCommands:
+          - cut
+          - sed
+
+  # A second project on the same repository: another upkeep, another strategy, and a draft pull request.
+  - projectKey: agent-kit
+    repo: example-org/lab-content
+    defaultBranch: main
+    deconflictInRepoSchedules: none
+    deconflictWorkflowIds: []
+    driftAudit:
+      enabled: true
+      schedule: "20 7 2 * *"
+      upkeepStrategy: code-quality-and-improvement-scan
+      instructions: Evaluate the agents, skills and prompts of the lab content for drift and propose only mechanical fixes with a self-improvement report.
+      instructionsFile: instructions/agent-kit.md
+      knowledgeSources:
+        watchUrls:
+          - url: https://changelog.example.org/
+            label: Platform changelog
+            kind: changelog
+          - url: https://changelog.example.org/feed/
+            label: Platform changelog feed
+            kind: feed
+          - url: https://docs.example.net/agents
+            label: Agent documentation
+            kind: docs
+          - url: https://releases.example.org/runtime/releases
+            label: Runtime releases
+            kind: release-notes
+        packageManifests: []
+        mcpServers:
+          docs-search:
+            type: http
+            url: https://mcp.example.org/docs
+          context-lookup:
+            command: npx
+            args:
+              - -y
+              - "@example-org/context-mcp@latest"
+      buildCommands: []
+      stagedScripts:
+        - scripts/validate-example.mjs
+      verifyCommands:
+        - ( set -euo pipefail; copy="${RUNNER_TEMP:?RUNNER_TEMP is not set}/gh-aw/sdlc-validator"; cmp -s "$copy/scripts/validate-example.mjs" "$GITHUB_WORKSPACE/scripts/validate-example.mjs" || { echo "scripts/validate-example.mjs is not the copy that prepare-run made before the agent started" >&2; exit 1; }; cmp -s "$copy/<factory-dir>/package.json" <factory>/package.json || { echo "<factory-dir>/package.json is not the copy that prepare-run made before the agent started" >&2; exit 1; }; diff -rq "$copy/<factory-dir>/src/drift/lib" <factory>/src/drift/lib >&2 || { echo "<factory-dir>/src/drift/lib is not the copy that prepare-run made before the agent started" >&2; exit 1; }; ! test -e "$GITHUB_WORKSPACE/scripts/node_modules" || { echo "scripts/node_modules is not the copy that prepare-run made before the agent started" >&2; exit 1; }; node "$copy/scripts/validate-example.mjs" --self-improve )
+        - ( set -euo pipefail; for f in tests/catalog-links.test.js tests/page-layout.test.js; do test -f "$f" || { echo "missing required test file $f" >&2; exit 1; }; done; npm ci; npm test )
+      draft: true
+      reviewers: []
+
+  # Upstream-only projects: no drift audit, so the reconciler renders no drift workflow for them.
+  - projectKey: demo-pipelines
+    repo: example-org/demo-pipelines
+    defaultBranch: main
+    deconflictInRepoSchedules: none
+    deconflictWorkflowIds: []
+    driftAudit:
+      enabled: false
+      schedule: "0 6 * * 1"
+      upkeepStrategy: content-and-docs-sync
+      instructions: ""
+      instructionsFile: null
+      knowledgeSources:
+        watchUrls: []
+        packageManifests: []
+        mcpServers: {}
+      buildCommands: []
+      verifyCommands: []
+      draft: false
+      reviewers: []
+
+  - projectKey: course-template
+    repo: example-org/course-template
+    defaultBranch: main
+    deconflictInRepoSchedules: none
+    deconflictWorkflowIds: []
+    driftAudit:
+      enabled: false
+      schedule: "0 6 * * 1"
+      upkeepStrategy: content-and-docs-sync
+      instructions: ""
+      instructionsFile: null
+      knowledgeSources:
+        watchUrls: []
+        packageManifests: []
+        mcpServers: {}
+      buildCommands: []
+      verifyCommands: []
+      draft: false
+      reviewers: []
+
+  # The downstream that every cascade of the fleet but one targets.
+  - projectKey: hub
+    repo: example-org/hub
+    defaultBranch: main
+    deconflictInRepoSchedules: none
+    deconflictWorkflowIds: []
+    driftAudit:
+      enabled: false
+      schedule: "0 6 * * 1"
+      upkeepStrategy: content-and-docs-sync
+      instructions: ""
+      instructionsFile: null
+      knowledgeSources:
+        watchUrls: []
+        packageManifests: []
+        mcpServers: {}
+      buildCommands: []
+      verifyCommands: []
+      draft: false
+      reviewers: []
+
+  # The orchestrator as an upstream: the orchestrator-to-hub edge below cascades this repository's briefing and a copy of this manifest into the hub.
+  # It has no drift audit of its own, so the reconciler renders no drift workflow for it.
+  - projectKey: orchestrator
+    repo: example-org/orchestrator
+    defaultBranch: main
+    deconflictInRepoSchedules: none
+    deconflictWorkflowIds: []
+    driftAudit:
+      enabled: false
+      schedule: "0 6 * * 1"
+      upkeepStrategy: content-and-docs-sync
+      instructions: ""
+      instructionsFile: null
+      knowledgeSources:
+        watchUrls: []
+        packageManifests: []
+        mcpServers: {}
+      buildCommands: []
+      verifyCommands: []
+      draft: false
+      reviewers: []
+
+  # A Python pair: no Node steps in its cascade.
+  - projectKey: config-kit
+    repo: example-org/config-kit
+    defaultBranch: main
+    deconflictInRepoSchedules: none
+    deconflictWorkflowIds: []
+    driftAudit:
+      enabled: false
+      schedule: "0 6 * * 1"
+      upkeepStrategy: content-and-docs-sync
+      instructions: ""
+      instructionsFile: null
+      knowledgeSources:
+        watchUrls: []
+        packageManifests: []
+        mcpServers: {}
+      buildCommands: []
+      verifyCommands: []
+      draft: false
+      reviewers: []
+
+  - projectKey: asset-registry
+    repo: example-org/asset-registry
+    defaultBranch: main
+    deconflictInRepoSchedules: none
+    deconflictWorkflowIds: []
+    driftAudit:
+      enabled: false
+      schedule: "0 6 * * 1"
+      upkeepStrategy: content-and-docs-sync
+      instructions: ""
+      instructionsFile: null
+      knowledgeSources:
+        watchUrls: []
+        packageManifests: []
+        mcpServers: {}
+      buildCommands: []
+      verifyCommands: []
+      draft: false
+      reviewers: []
+
+dependencyEdges:
+  # A mechanical cascade: import, build and verify with plain commands. The edge sets up its own browser for its end-to-end specification, and pins Node.
+  - edgeId: docs-to-hub
+    upstreamRepo: example-org/docs-site
+    upstreamKey: docs-site
+    upstreamSlug: DOCS_SITE
+    upstreamDefaultBranch: main
+    initialBaselineSha: f0fb1b9b1678ccaf82503a3ac50bb459f913ea31
+    downstreamRepo: example-org/hub
+    mode: mechanical
+    schedule: "7 */4 * * *"
+    onCommitOnlyAdvance: noop
+    stateVariable: SDLC_SYNC_STATE_DOCS_SITE
+    provenanceFile: public/docs/source.json
+    provenanceJsonPointer: /commit
+    branchName: sdlc/cascade-docs-to-hub
+    closeOlderKey: sdlc-cascade-docs-to-hub
+    reviewers:
+      - example-reviewer
+    installDirectories:
+      - .
+      - apps/site
+    nodeVersion: "24"
+    setupSteps:
+      - name: Install the browser of the end-to-end tests
+        run: npx playwright install --with-deps chromium
+    importCommands:
+      - npm run import:docs -- <checkout>
+    preflightCommands: []
+    acceptCommands: []
+    buildCommands:
+      - npm run build
+      - SITE_ORIGIN=https://site.example.com npm run build:catalog
+    # The browser gate is the specification that covers the pages that this edge imports: the full suite of the hub needs fonts that the runner does not have.
+    verifyCommands:
+      - npm run typecheck
+      - npm run lint
+      - npm test
+      - npm run test:site
+      - npx playwright test tests/browser/site.spec.ts
+    adaptationInstructions: ""
+    allowedFiles:
+      - public/docs/**
+    protectedFilesExclude: []
+    autoMerge: false
+    immutableGates:
+      zeroDiffPaths: []
+
+  # An AI adaptation cascade with two checks: a report that a classifier judges, and a helper that decides by its exit code. It declares its own sync scopes,
+  # the files that its pull-request result reports, the gates that the agent must leave as they were, and a second provenance file that the router logs.
+  - edgeId: lab-to-hub
+    upstreamRepo: example-org/lab-content
+    upstreamKey: lab-content
+    upstreamSlug: LAB_CONTENT
+    upstreamDefaultBranch: main
+    initialBaselineSha: 0f4b4d782fa1173532a582635eadb1500fbefb56
+    downstreamRepo: example-org/hub
+    mode: ai-adaptation
+    schedule: "7 */4 * * *"
+    onCommitOnlyAdvance: noop
+    stateVariable: SDLC_SYNC_STATE_LAB_CONTENT
+    provenanceFile: content/pages/source-inputs.json
+    provenanceJsonPointer: /commit
+    branchName: sdlc/cascade-lab-to-hub
+    closeOlderKey: sdlc-cascade-lab-to-hub
+    reviewers:
+      - example-reviewer
+    syncScopes:
+      - both
+      - content-only
+      - app-only
+    installDirectories:
+      - .
+      - apps/site
+    nodeVersion: "24"
+    setupSteps:
+      - name: Install the browser of the end-to-end tests
+        run: npx playwright install --with-deps chromium
+    importCommands: []
+    preflightCommands:
+      - npm run check:inputs -- <checkout>
+      - node "$GITHUB_WORKSPACE/scripts/check-sources.mjs" --downstream "$GITHUB_WORKSPACE/hub" --upstream <checkout> --commit "$TARGET_SHA"
+    preflightChecks:
+      - scope: content-only
+        classifier: node "$GITHUB_WORKSPACE/scripts/classify-report.mjs"
+      - scope: app-only
+    logProvenance:
+      - file: apps/site/sources.json
+        pointer: /_provenance/commit
+    acceptCommands:
+      - npm run check:inputs -- <checkout> --accept
+      - node "$GITHUB_WORKSPACE/scripts/check-sources.mjs" --downstream "$GITHUB_WORKSPACE/hub" --upstream <checkout> --commit "$UPSTREAM_SHA" --accept
+    buildCommands:
+      - npm run build:content
+    verifyCommands:
+      - npm run build:content
+      - npm run build:views
+      - git -C "$GITHUB_WORKSPACE/hub" status --porcelain
+      - npm run build
+      - SITE_ORIGIN=https://site.example.com npm run build:catalog
+      - npm run typecheck
+      - npm run lint
+      - npm test
+      - npm run test:site
+      - npx playwright test tests/browser/site.spec.ts
+      - |
+        # post-run check: a dry run must not leave a commit
+        if [ "${DRY_RUN:-}" = "true" ]; then
+          [ "$AGENT_HEAD_SHA" = "$BASE_SHA" ] || { echo "dry_run is true but the agent committed $BASE_SHA..$AGENT_HEAD_SHA" >&2; exit 1; }
+        fi
+      - |
+        # post-run check: committed provenance records upstream_sha
+        if [ "$AGENT_HEAD_SHA" != "$BASE_SHA" ]; then
+          node --input-type=module -e '
+          import { readFileSync } from "node:fs";
+          const hub = process.env.GITHUB_WORKSPACE + "/hub/";
+          const want = process.env.UPSTREAM_SHA;
+          const load = (name) => {
+            try { return JSON.parse(readFileSync(hub + name, "utf8")); }
+            catch { console.error("provenance file is missing or unparseable: " + name); process.exit(1); }
+          };
+          const recorded = {
+            "provenance.json commit": load("content/pages/provenance.json").commit,
+            "source-inputs.json commit": load("content/pages/source-inputs.json").commit,
+            "sources.json _provenance.commit": (load("apps/site/sources.json")._provenance ?? {}).commit,
+          };
+          const behind = Object.keys(recorded).filter((label) => recorded[label] !== want);
+          if (behind.length > 0) { console.error("stale provenance: " + behind.join(", ")); process.exit(1); }
+          '
+          node "$GITHUB_WORKSPACE/scripts/check-sources.mjs" --downstream "$GITHUB_WORKSPACE/hub" --upstream <checkout> --commit "$UPSTREAM_SHA"
+        fi
+      - |
+        # post-run check: the upstream checkout stays read-only
+        git -C <checkout> diff --quiet HEAD && test -z "$(git -C <checkout> ls-files --others --exclude-standard)"
+    adaptationInstructions: >-
+      Bring the content pages and the hub views in line with the cumulative upstream change.
+      Start from the reports under /tmp/gh-aw/agent/ (input-report.txt, source-check.txt and upstream-diff.txt) and change only what they support.
+      Read the input report as plain text: its exit code does not tell a drift from a crash.
+      A change is needed when the input report lists changed, new or removed inputs or PROBLEM lines, or when source-check.txt lists a view under changed.
+      Edit the pages (content/pages/index.ts and the p*.ts modules), README.md and tests/pages.test.ts.
+      Keep every page inside the limits of the locked rules module: reading time at the rate that it exports (READING_WPM) and the page word counts (PAGE_WORDS).
+      In tests/pages.test.ts leave the lines above the first describe(, every describe( header and the locked it(...) blocks exactly as they are.
+      Edit the hub views (apps/site/client/src/views/*.tsx) and apps/site/README.md, and leave the locked kernel files alone.
+      The login and runner tests and the kernel sources stay zero-diff.
+    adaptation:
+      preflightReports:
+        - input-report.txt
+        - source-check.txt
+      helpers:
+        sourceCheck:
+          manifest: apps/site/sources.json
+      pullRequestResult:
+        adaptedPages: content/pages/p*.ts
+        adaptedViews: apps/site/client/src/views/*.tsx
+    allowedFiles:
+      - README.md
+      - content/pages/index.ts
+      - content/pages/p*.ts
+      - content/pages/provenance.json
+      - content/pages/source-inputs.json
+      - public/pages/**
+      - tests/pages.test.ts
+      - apps/site/sources.json
+      - apps/site/README.md
+      - apps/site/client/src/views/*.tsx
+    protectedFilesExclude:
+      - /README.md
+      - /apps/site/README.md
+    autoMerge: false
+    immutableGates:
+      zeroDiffPaths:
+        - content/rules.ts
+        - content/types.ts
+        - kernel
+        - scripts
+        - tests/login.test.ts
+        - tests/runner.test.ts
+        - apps/site/server/src/index.ts
+        - apps/site/server/src/sandbox.ts
+        - apps/site/server/tests/sandbox.test.ts
+      generatedPaths:
+        - public/**
+      lockedTestBlocks:
+        - file: tests/pages.test.ts
+          blocks:
+            - kind: it
+              title: "accepts every page of the course without errors or warnings"
+            - kind: it
+              title: "gives every page a heading and a body"
+            - kind: it
+              title: "keeps every page inside the length limits"
+      inProcessInvariants:
+        frozenModules:
+          - content/rules.ts
+          - tests/support/terms.ts
+        course:
+          module: content/pages/index.ts
+          export: course
+        check:
+          module: content/rules.ts
+          export: checkCourse
+        constants:
+          - module: content/rules.ts
+            export: READING_WPM
+            value: 180
+          - module: content/rules.ts
+            export: PAGE_WORDS
+            value:
+              target: 120
+              max: 200
+        customerTerms:
+          module: tests/support/terms.ts
+          export: findBannedTerms
+
+  # An AI adaptation cascade whose only check lists the upstream's workflow runs: a classifier compares the listing with the snapshot that the hub recorded, and an
+  # unchanged snapshot is a noop of its own kind.
+  - edgeId: pipelines-to-hub
+    upstreamRepo: example-org/demo-pipelines
+    upstreamKey: demo-pipelines
+    upstreamSlug: DEMO_PIPELINES
+    upstreamDefaultBranch: main
+    initialBaselineSha: 424afad8465b1abc746d48653daa88b200adb62b
+    downstreamRepo: example-org/hub
+    mode: ai-adaptation
+    schedule: "7 */4 * * *"
+    onCommitOnlyAdvance: noop
+    stateVariable: SDLC_SYNC_STATE_DEMO_PIPELINES
+    provenanceFile: content/pipelines/provenance.json
+    provenanceJsonPointer: /commit
+    branchName: sdlc/cascade-pipelines-to-hub
+    closeOlderKey: sdlc-cascade-pipelines-to-hub
+    reviewers:
+      - example-reviewer
+    syncScopes:
+      - both
+      - runs-only
+    installDirectories:
+      - .
+      - apps/site
+    importCommands: []
+    preflightCommands:
+      - gh api "repos/example-org/demo-pipelines/actions/runs?per_page=100"
+    preflightChecks:
+      - scope: runs-only
+        classifier: node "$GITHUB_WORKSPACE/scripts/classify-runs.mjs"
+        noopAction: noop-unchanged-snapshot
+    acceptCommands:
+      - |-
+        node --input-type=module -e 'import { writeFileSync } from "node:fs"; writeFileSync("content/pipelines/provenance.json", JSON.stringify({ repository: "example-org/demo-pipelines", commit: process.env.UPSTREAM_SHA }, null, 2) + "\n");'
+    buildCommands:
+      - node content/pipelines/capture/fetch-run-data.mjs
+      - npm run build:content
+    verifyCommands:
+      - npm run build:content
+      - git -C "$GITHUB_WORKSPACE/hub" status --porcelain
+      - npm run build
+      - npm run typecheck
+      - npm run lint
+      - npm test
+      - |
+        # post-run check: a dry run must not leave a commit
+        if [ "${DRY_RUN:-}" = "true" ]; then
+          [ "$AGENT_HEAD_SHA" = "$BASE_SHA" ] || { echo "dry_run is true but the agent committed $BASE_SHA..$AGENT_HEAD_SHA" >&2; exit 1; }
+        fi
+      - |
+        # post-run check: committed provenance records upstream_sha
+        if [ "$AGENT_HEAD_SHA" != "$BASE_SHA" ]; then
+          node --input-type=module -e '
+          import { readFileSync } from "node:fs";
+          const fail = (message) => { console.error(message); process.exit(1); };
+          let record;
+          try { record = JSON.parse(readFileSync(process.env.GITHUB_WORKSPACE + "/hub/content/pipelines/provenance.json", "utf8")); }
+          catch { fail("provenance.json is missing or unparseable"); }
+          const exact = Object.keys(record).sort().join() === "commit,repository";
+          if (!exact || record.repository !== "example-org/demo-pipelines" || record.commit !== process.env.UPSTREAM_SHA) fail("provenance.json does not record the upstream sha");
+          '
+        fi
+      - |
+        # post-run check: the upstream checkout stays read-only
+        git -C <checkout> diff --quiet HEAD && test -z "$(git -C <checkout> ls-files --others --exclude-standard)"
+    adaptationInstructions: >-
+      Inspect the new upstream workflow runs: the listing is saved to /tmp/gh-aw/agent/upstream-runs.json (and upstream-diff.txt lists the changed upstream files),
+      so compare it with the RUNS list of the capture script.
+      When upstream runs advanced, update RUNS (the id and story of each entry) and the matching expectations in tests/pipelines.test.ts,
+      keeping the lines before the first describe(, every describe( header and the locked describe blocks byte for byte.
+      Then write { "repository": "example-org/demo-pipelines", "commit": "$UPSTREAM_SHA" } to content/pipelines/provenance.json,
+      run node content/pipelines/capture/fetch-run-data.mjs from the repository root, and then npm run build:content.
+      Any non-zero exit of the capture script is a failed run: never commit run-data.json from a run that did not exit 0.
+    adaptation:
+      preflightReports:
+        - upstream-runs.json
+    allowedFiles:
+      - content/pipelines/provenance.json
+      - content/pipelines/capture/fetch-run-data.mjs
+      - content/pipelines/run-data.json
+      - public/pipelines/**
+      - tests/pipelines.test.ts
+    protectedFilesExclude: []
+    autoMerge: false
+    immutableGates:
+      zeroDiffPaths:
+        - content/rules.ts
+        - content/types.ts
+        - kernel
+        - scripts
+        - tests/login.test.ts
+        - tests/runner.test.ts
+      lockedTestBlocks:
+        - file: tests/pipelines.test.ts
+          blocks:
+            - kind: describe
+              title: pipelines animated figure
+            - kind: describe
+              title: pipelines sanitization
+          lockedImports:
+            - findBannedTerms
+      inProcessInvariants:
+        frozenModules:
+          - content/rules.ts
+          - tests/support/terms.ts
+        customerTerms:
+          module: tests/support/terms.ts
+          export: findBannedTerms
+
+  # An AI adaptation cascade whose preflight is a plain git diff of the tracked paths, with the default sync scope. A commit that changes none of them still moves the
+  # provenance of the hub forward.
+  - edgeId: course-to-hub
+    upstreamRepo: example-org/course-template
+    upstreamKey: course-template
+    upstreamSlug: COURSE_TEMPLATE
+    upstreamDefaultBranch: main
+    initialBaselineSha: 984439a281ae7376813489eba129f778c813e5f7
+    downstreamRepo: example-org/hub
+    mode: ai-adaptation
+    schedule: "7 */4 * * *"
+    onCommitOnlyAdvance: bump-provenance
+    stateVariable: SDLC_SYNC_STATE_COURSE_TEMPLATE
+    provenanceFile: content/course/provenance.json
+    provenanceJsonPointer: /commit
+    branchName: sdlc/cascade-course-to-hub
+    closeOlderKey: sdlc-cascade-course-to-hub
+    reviewers:
+      - example-reviewer
+    installDirectories:
+      - .
+      - apps/site
+    importCommands: []
+    preflightCommands:
+      - git -C <checkout> diff --quiet "$LAST_MERGED_SHA" "$TARGET_SHA" -- units samples src theme index.html README.md
+    acceptCommands:
+      - |-
+        node --input-type=module -e 'import { writeFileSync } from "node:fs"; writeFileSync("content/course/provenance.json", JSON.stringify({ repository: "example-org/course-template", commit: process.env.UPSTREAM_SHA }, null, 2) + "\n");'
+    buildCommands:
+      - npm run build:content
+    verifyCommands:
+      - npm run build:content
+      - git -C "$GITHUB_WORKSPACE/hub" status --porcelain
+      - npm run build
+      - npm run typecheck
+      - npm run lint
+      - npm test
+      - |
+        # post-run check: a dry run must not leave a commit
+        if [ "${DRY_RUN:-}" = "true" ]; then
+          [ "$AGENT_HEAD_SHA" = "$BASE_SHA" ] || { echo "dry_run is true but the agent committed $BASE_SHA..$AGENT_HEAD_SHA" >&2; exit 1; }
+        fi
+      - |
+        # post-run check: committed provenance records upstream_sha
+        if [ "$AGENT_HEAD_SHA" != "$BASE_SHA" ]; then
+          node --input-type=module -e '
+          import { readFileSync } from "node:fs";
+          const fail = (message) => { console.error(message); process.exit(1); };
+          let record;
+          try { record = JSON.parse(readFileSync(process.env.GITHUB_WORKSPACE + "/hub/content/course/provenance.json", "utf8")); }
+          catch { fail("provenance.json is missing or unparseable"); }
+          const exact = Object.keys(record).sort().join() === "commit,repository";
+          if (!exact || record.repository !== "example-org/course-template" || record.commit !== process.env.UPSTREAM_SHA) fail("provenance.json does not record the upstream sha");
+          '
+        fi
+      - |
+        # post-run check: the upstream checkout stays read-only
+        git -C <checkout> diff --quiet HEAD && test -z "$(git -C <checkout> ls-files --others --exclude-standard)"
+    adaptationInstructions: >-
+      Compare the whole upstream range previous_sha..upstream_sha (upstream-diff.txt lists the changed files, and dispatch-inputs.json holds both revisions)
+      and adapt only what the change needs: content/course/** and tests/course.test.ts, within the allowed files below.
+      In the test file leave the lines above the first describe(, every describe( header and the locked it(...) blocks exactly as they are.
+      If nothing needs to adapt, leave the worktree untouched and commit nothing: the run then ends with the outcome noop-no-changes and opens no pull request.
+      Otherwise write { "repository": "example-org/course-template", "commit": "$UPSTREAM_SHA" } to content/course/provenance.json,
+      run npm run build:content, and commit provenance.json, content/course/**, tests/course.test.ts and public/course/** before the pull request is created.
+    allowedFiles:
+      - content/course/provenance.json
+      - content/course/src/**
+      - public/course/**
+      - tests/course.test.ts
+    protectedFilesExclude: []
+    autoMerge: false
+    immutableGates:
+      zeroDiffPaths:
+        - content/rules.ts
+        - content/types.ts
+        - kernel
+        - scripts
+        - tests/login.test.ts
+        - tests/runner.test.ts
+      lockedTestBlocks:
+        - file: tests/course.test.ts
+          blocks:
+            - kind: it
+              title: gives every unit a title and a non-empty summary
+            - kind: it
+              title: contains no banned terms, private framing or personal paths
+      inProcessInvariants:
+        frozenModules:
+          - content/rules.ts
+          - tests/support/terms.ts
+        customerTerms:
+          module: tests/support/terms.ts
+          export: findBannedTerms
+
+  # Self-cascade: the orchestrator is the upstream and the hub the downstream. The hub's importer pins the briefing and a copy of this manifest to the revision
+  # that the cascade delivers, in public/orchestrator/source.json.
+  - edgeId: orchestrator-to-hub
+    upstreamRepo: example-org/orchestrator
+    upstreamKey: orchestrator
+    upstreamSlug: ORCHESTRATOR
+    upstreamDefaultBranch: main
+    initialBaselineSha: 27f7a798baa72557672e49fc8ec275b7e8aa5dc6
+    downstreamRepo: example-org/hub
+    mode: mechanical
+    schedule: "7 */4 * * *"
+    onCommitOnlyAdvance: noop
+    stateVariable: SDLC_SYNC_STATE_ORCHESTRATOR
+    provenanceFile: public/orchestrator/source.json
+    provenanceJsonPointer: /commit
+    branchName: sdlc/cascade-orchestrator-to-hub
+    closeOlderKey: sdlc-cascade-orchestrator-to-hub
+    reviewers:
+      - example-reviewer
+    installDirectories:
+      - .
+      - apps/site
+    importCommands:
+      - npm run import:orchestrator -- <checkout>
+    preflightCommands: []
+    acceptCommands: []
+    buildCommands:
+      - npm run build
+      - SITE_ORIGIN=https://site.example.com npm run build:catalog
+    # Narrowed like the docs-to-hub edge, for the same reason.
+    verifyCommands:
+      - npm run typecheck
+      - npm run lint
+      - npm test
+      - npm run test:site
+      - npx playwright test tests/browser/site.spec.ts
+    adaptationInstructions: ""
+    allowedFiles:
+      - public/orchestrator/**
+    protectedFilesExclude: []
+    autoMerge: false
+    immutableGates:
+      zeroDiffPaths: []
+
+  # A Python cascade between two repositories: no Node setup, the importer is the downstream's own command-line tool.
+  - edgeId: config-to-registry
+    upstreamRepo: example-org/config-kit
+    upstreamKey: config-kit
+    upstreamSlug: CONFIG_KIT
+    upstreamDefaultBranch: main
+    initialBaselineSha: 63978b58ed7ec79160a7434d63359c7632d21777
+    downstreamRepo: example-org/asset-registry
+    mode: mechanical
+    schedule: "7 */4 * * *"
+    onCommitOnlyAdvance: noop
+    stateVariable: SDLC_SYNC_STATE_CONFIG_KIT
+    provenanceFile: governance/upstream-provenance.json
+    provenanceJsonPointer: /commit
+    branchName: sdlc/cascade-config-to-registry
+    closeOlderKey: sdlc-cascade-config-to-registry
+    reviewers:
+      - example-reviewer
+    pythonVersion: "3.12"
+    importCommands:
+      - registry sync-upstream --from <checkout>
+    preflightCommands: []
+    acceptCommands: []
+    buildCommands: []
+    # `python -m pytest`, as the repository's own CI runs it: its tests import a top-level module, which the bare `pytest` script leaves off sys.path.
+    verifyCommands:
+      - registry validate
+      - python -m pytest -q
+      - registry release build --out /tmp/registry-verify-dist
+    adaptationInstructions: ""
+    allowedFiles:
+      - assets/**
+      - governance/upstream-provenance.json
+      - .github/CODEOWNERS
+    protectedFilesExclude: []
+    autoMerge: false
+    immutableGates:
+      zeroDiffPaths: []

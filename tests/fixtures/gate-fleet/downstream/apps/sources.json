@@ -1,0 +1,25 @@
+{
+  "_provenance": { "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+  "views": {
+    "view01": { "source": "labs/lab01.md", "sha256": "58a3be05309dc5511e121b417e9838dc333488c52e99b26ed2aab873bfc9990d" },
+    "view02": { "source": "labs/lab02.md", "sha256": "778e8d7a4d20cc67a731af2fd7805ba68cca11c49f1127e9a67f28d61733e4d2" },
+    "view03": { "source": "labs/lab03.md", "sha256": "bf60725a88edd6a5375d5bca054d61c41d8db9cda0b763910477be90314d03fe" },
+    "view04": { "source": "labs/lab04.md", "sha256": "e4547efa8977fa22943ea7aae84227113620724646311247f0c763d3c5e65fa9" },
+    "view05": { "source": "labs/lab05.md", "sha256": "1a64c25e337ef6dbf9754217d7280511329202fce773b8f9323b37ed9de35d07" },
+    "view06": { "source": "labs/lab06.md", "sha256": "5f947405819cd7792296810be405b15d212540e0f5a180e9e16b6d24fb3b0722" },
+    "view07": { "source": "labs/lab07.md", "sha256": "58ffd468e2b75bc3e6cba98b82a4355225cbd795174760eae9003ac71749e5c3" },
+    "view08": { "source": "labs/lab08.md", "sha256": "e38097780fe4174b7662e3b11a704f8d8bf5e3fe50c66a909b365228e16e0235" },
+    "view09": { "source": "labs/lab09.md", "sha256": "48791ec306d519fe9814ee42c4adba2bc56fb71f3a29ecedd17f044a51540f54" },
+    "view10": { "source": "labs/lab10.md", "sha256": "aab316dd5fc663747b36fca1f798d7cd4468829611d6071242004a11215fc2e6" },
+    "view11": { "source": "labs/lab11.md", "sha256": "2ab3946746a415f57351ce41630daf5447d9b9c781c81436ebd6064acd6a0631" },
+    "view12": { "source": "labs/lab12.md", "sha256": "01da5b909bf51b610771f82f5f659727d0bbc3a27a34e2466c22843c29b6b257" },
+    "view13": { "source": "labs/lab13.md", "sha256": "cbd917c893ab92d0d20d85e786ffc33b28c97f34df4b8231f530930524930f87" },
+    "view14": { "source": "labs/lab14.md", "sha256": "f6b38ab38e6944aae3d62f514d5832fce5318498b186f727215aa00295116390" },
+    "view15": { "source": "labs/lab15.md", "sha256": "19d21ad9e0ca96c28bc178532914f1dbbde115dece1f6f3b68912d8295b9aa3e" },
+    "view16": { "source": "labs/lab16.md", "sha256": "e169b3e18c56e7d7b8dd9b9025d788ab99d4c511b8f05de846b16fd941947729" },
+    "view17": { "source": "labs/lab17.md", "sha256": "1f473371fb5d076f83001631cd5d5782ce20a2295c9d20b22e20203ed8afc1d4" },
+    "view18": { "source": "labs/lab18.md", "sha256": "921e5e998980c9a77cfe83a2fa791d3a598b1a135cbbc712d062cebd8fc0ce24" },
+    "view19": { "source": "labs/lab19.md", "sha256": "4264d70df8d6ddb5b6db469cafc26bcfc4c7c1357f8ea9e2355e41427ad24198" },
+    "view20": { "source": "labs/lab20.md", "sha256": "d5bb38a82800863651db900981e1f0bab95ef843d44764c488a21527e5bdfc56" }
+  }
+}

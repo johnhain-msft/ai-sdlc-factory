@@ -1,0 +1,9 @@
+manifest-version: "1"
+name: AI SDLC Factory
+min-version: v1.0.1
+description: Declarative fleet manifest, security-policy renderer and bootstrap CLIs for a gh-aw based AI SDLC orchestrator. The package carries the onboarding workflow seed; the factory itself is an npm dependency.
+license: MIT
+includes:
+  - source: payload/workflows/sdlc-onboard.md
+    destination: .github/workflows/sdlc-onboard.md
+    kind: agentic-workflow

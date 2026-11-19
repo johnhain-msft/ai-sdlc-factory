@@ -1,0 +1,51 @@
+{
+  "name": "ai-sdlc-factory",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Declarative fleet manifest, security-policy renderer, pipeline reconciler, bootstrap and onboarding CLIs for a gh-aw based AI SDLC orchestrator.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/johnhain-msft/ai-sdlc-factory.git"
+  },
+  "bin": {
+    "sdlc-bootstrap": "bin/sdlc-bootstrap.mjs",
+    "sdlc-onboard": "bin/sdlc-onboard.mjs",
+    "sdlc-reconcile": "bin/sdlc-reconcile.mjs"
+  },
+  "exports": {
+    "./script-kit": "./src/script-kit.mjs",
+    "./drift-lib": "./src/drift/lib/index.mjs",
+    "./reconcile": "./src/reconcile-api.mjs",
+    "./schemas/*": "./schemas/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "bin",
+    "schemas",
+    "prompts",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "test": "node --test --test-concurrency=4 tests/*.test.mjs tests/s1/*.test.mjs tests/s2/*.test.mjs tests/s3/*.test.mjs tests/s4/*.test.mjs tests/s5/*.test.mjs",
+    "test:root": "node --test --test-concurrency=4 tests/*.test.mjs",
+    "test:s1": "node --test --test-concurrency=4 tests/s1/*.test.mjs",
+    "test:s2": "node --test --test-concurrency=4 tests/s2/*.test.mjs",
+    "test:s3": "node --test --test-concurrency=4 tests/s3/*.test.mjs",
+    "test:s4": "node --test --test-concurrency=4 tests/s4/*.test.mjs",
+    "test:s5": "node --test --test-concurrency=4 tests/s5/*.test.mjs",
+    "leak-guard": "node tools/leak-guard/scan.mjs --tree"
+  },
+  "dependencies": {
+    "ajv": "^8.17.1",
+    "libsodium-wrappers": "^0.8.4",
+    "yaml": "^2.8.1"
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "description": "The commit history of a synthetic upstream for a preflight that is a plain git diff (SPEC-03 AC23). A nested git repository cannot be committed to this one, so the tests/s3 helpers materialise this recipe into a real bare repository on disk. The tracked paths of the edge are content, assets, src, index.html and README.md; docs and .github are not tracked.",
+  "commits": [
+    {
+      "name": "baseline",
+      "message": "baseline",
+      "files": {
+        "content/page01.md": "page one, revision 1\n",
+        "assets/page01.md": "asset one, revision 1\n",
+        "src/app.js": "export const app = 1;\n",
+        "assets/site.css": "body { margin: 0; }\n",
+        "index.html": "<h1>template</h1>\n",
+        "README.md": "the template\n",
+        "docs/notes.md": "notes, revision 1\n"
+      }
+    },
+    {
+      "name": "tracked-change",
+      "message": "change a tracked page",
+      "files": { "content/page01.md": "page one, revision 2\n" }
+    },
+    {
+      "name": "untracked-change",
+      "message": "change only what is not tracked",
+      "files": { "docs/notes.md": "notes, revision 2\n", ".github/workflows/ci.yml": "name: ci\n" }
+    },
+    {
+      "name": "tracked-revert",
+      "message": "put the page back as it was in the baseline",
+      "files": { "content/page01.md": "page one, revision 1\n" }
+    }
+  ]
+}

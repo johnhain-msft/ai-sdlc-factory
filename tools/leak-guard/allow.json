@@ -1,0 +1,81 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "rule": "digest:d13",
+      "paths": ["package.json"],
+      "reason": "The maintainer handle is public by design: package.json carries it in the repository metadata. No other file may name it, not the README, the changelog or the license."
+    },
+    {
+      "rule": "digest:d13",
+      "paths": ["commit:author", "commit:committer", "tag:tagger"],
+      "reason": "The maintainer's GitHub no-reply identity is the commit identity of the public history, and the tagger of its release tag (design K.5). Only the author, committer and tagger lines are exempt: commit subjects and bodies, and tag names and messages, are scanned like any other text."
+    },
+    {
+      "rule": "secret-shape",
+      "paths": ["tests/s5/c1-request.test.mjs"],
+      "lines": [19],
+      "reason": "Invented token-shaped constant (65 characters; a real fine-grained token has 93) used as a test input, not a credential."
+    },
+    {
+      "rule": "secret-shape",
+      "paths": ["tests/s5/cli-flags.test.mjs"],
+      "lines": [84],
+      "reason": "A PEM header line passed as a --private-key flag value to prove that secrets are refused as flags; the body is a placeholder."
+    },
+    {
+      "rule": "secret-shape",
+      "paths": ["tests/s5/gho-rejection.test.mjs"],
+      "lines": [34],
+      "reason": "A PEM header with a placeholder body, used to test the token-type check; not key material."
+    },
+    {
+      "rule": "secret-shape",
+      "paths": ["tests/s5/helpers/keys.mjs"],
+      "lines": [9],
+      "reason": "A comment that names the PEM header of the key this helper generates at run time; no key material is in the file."
+    },
+    {
+      "rule": "secret-shape",
+      "paths": ["tests/s5/instructions-secrets.test.mjs"],
+      "lines": [52, 53],
+      "reason": "PEM and OpenSSH header lines with placeholder bodies: the inputs of the instruction secret scanner's own test."
+    },
+    {
+      "rule": "secret-shape",
+      "paths": ["tests/s5/manifest-flow.test.mjs"],
+      "lines": [15],
+      "reason": "A PEM header with a placeholder body in an invented App registration returned by a fake GitHub; not key material."
+    },
+    {
+      "rule": "secret-shape",
+      "paths": ["tests/s5/onboard-synthesize.test.mjs"],
+      "lines": [585],
+      "reason": "PEM header line with a placeholder body: an input of the secret-refusal table; not key material."
+    },
+    {
+      "rule": "secret-shape",
+      "paths": ["tests/s5/ownership.test.mjs"],
+      "lines": [245],
+      "reason": "Invented token-shaped constant (65 characters; a real fine-grained token has 93) passed as a scenario environment value; not a credential."
+    },
+    {
+      "rule": "secret-shape",
+      "paths": ["tests/s5/secret-hygiene.test.mjs"],
+      "lines": [15, 16],
+      "reason": "Two invented token-shaped constants (69 and 71 characters) used to prove that tokens never reach a log or a report; not credentials."
+    },
+    {
+      "rule": "secret-shape",
+      "paths": ["tests/s5/secrets.test.mjs"],
+      "lines": [14, 234],
+      "reason": "An invented token-shaped constant (71 characters) and a startsWith check on the PEM header of a key generated at run time; not credentials."
+    },
+    {
+      "rule": "secret-shape",
+      "paths": ["tests/s5/summary-report.test.mjs"],
+      "lines": [202, 297],
+      "reason": "Invented token-shaped constants (63 and 65 characters) passed as scenario environment values; not credentials."
+    }
+  ]
+}

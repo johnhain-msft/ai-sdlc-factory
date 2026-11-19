@@ -1,0 +1,506 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SDLC fleet manifest",
+  "description": "Declarative fleet manifest (sdlc.yaml): any number of projects and directed dependency edges. The engine is repository-agnostic; the reference fleet is preset data.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["projects"],
+  "properties": {
+    "projects": {
+      "description": "Any number of project entries, each declaring an arbitrary <owner>/<repo>. Two entries may name the same repository.",
+      "type": "array",
+      "items": { "$ref": "#/definitions/project" }
+    },
+    "dependencyEdges": {
+      "description": "Directed edges from an upstream repository to a downstream repository; fan-in, fan-out and multi-hop chains are valid.",
+      "type": "array",
+      "default": [],
+      "items": { "$ref": "#/definitions/edge" }
+    },
+    "protectedFilesExclude": {
+      "description": "Basenames, path prefixes or '/'-rooted exact paths or globs that drift and onboarding handlers exclude from the protected-files policy.",
+      "type": "array",
+      "default": [],
+      "items": { "$ref": "#/definitions/protectedFilesEntry" }
+    },
+    "engineApiKeySecret": {
+      "description": "Name of the secret that holds the engine API key when engineAuthMode is api-key.",
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+    },
+    "factory": { "$ref": "#/definitions/factory" },
+    "dedupe": { "$ref": "#/definitions/dedupe" },
+    "onboarding": {
+      "description": "Optional: what the onboarding command (bin/sdlc-onboard.mjs) reads of a repository that it inspects.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "provenanceNames": {
+          "description": "The base names of the files that an inspection takes for a provenance file (the file that records the commit of an upstream that a repository was imported from): a file of one of these names, at any depth, is one. Names only, no directory. Absent: source.json and provenance.json. An empty list: no file is one.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^(?!\\.{1,2}$)[A-Za-z0-9_.@+-]{1,100}$" }
+        }
+      }
+    },
+    "prompts": {
+      "description": "Optional: the examples and the wording that the rendered prompts take from the adopter instead of from the engine. Absent, the prompts name no example and say \"the adapted files\".",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "reportExamples": {
+          "description": "Reports that a drift or implementation prompt names as examples of the report that the registration instructions may define (for example docs/audit-report.md), as plain relative paths: (such as `a` or `b`). None: the prompt names no example.",
+          "type": "array",
+          "uniqueItems": true,
+          "default": [],
+          "items": { "$ref": "#/definitions/reportExample" }
+        },
+        "pullRequestBodyItems": {
+          "description": "What the body of the pull request of an AI adaptation workflow lists besides the range of commits and the correlation id, as one line of prose.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+          "default": "the adapted files"
+        }
+      }
+    },
+    "state": {
+      "description": "Optional: how the engine spells the sync state variables (SDLC_SYNC_STATE_<SLUG>) that it writes. The fourth field of the state is the head of the downstream's default branch that was last seen; releases before 0.1.0 named it portfolioMainSha, and the code of such a release rejects a variable that has the canonical name downstreamMainSha, so a rollback needs the old name.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "dialect": {
+          "description": "preserve (the default): write the field name that was read, so that nothing changes until this is set. legacy: always portfolioMainSha. downstream: always downstreamMainSha; each variable converts on its next write, once. Set downstream only after the rollback window has passed: the previous release cannot read the new name.",
+          "enum": ["preserve", "legacy", "downstream"],
+          "default": "preserve"
+        }
+      }
+    }
+  },
+  "definitions": {
+    "dedupe": {
+      "description": "Optional: how the dedupe step of the drift and implementation workflows tells the pull requests of the target's own scheduled workflows apart from a duplicate of the one that it guards. At the top of the manifest it is the convention of the fleet; in a project's driftAudit it replaces the fleet's for that project (it is not merged). The engine's own sdlc/ branches are always candidates. Absent, no other pull request is a candidate and every match is a possible duplicate.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "upkeeps": {
+          "description": "The upkeeps of the target's own schedules. A pull request whose head branch starts with one of an upkeep's branchPrefixes, or that carries one of its labels, is a possible duplicate and belongs to that upkeep.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id"],
+            "properties": {
+              "id": { "$ref": "#/definitions/upkeepId" },
+              "branchPrefixes": {
+                "type": "array",
+                "uniqueItems": true,
+                "default": [],
+                "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$", "maxLength": 200 }
+              },
+              "labels": { "type": "array", "uniqueItems": true, "default": [], "items": { "type": "string", "minLength": 1, "maxLength": 50 } }
+            }
+          }
+        },
+        "strategyUpkeep": {
+          "description": "Which upkeep each upkeepStrategy does, by upkeep id. A workflow whose strategy is not listed has no upkeep, so it treats every pull request that is not its own or the fleet's as a possible duplicate.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "content-and-docs-sync": { "$ref": "#/definitions/upkeepId" },
+            "dependency-and-pattern-modernization": { "$ref": "#/definitions/upkeepId" },
+            "code-quality-and-improvement-scan": { "$ref": "#/definitions/upkeepId" },
+            "custom": { "$ref": "#/definitions/upkeepId" }
+          }
+        }
+      }
+    },
+    "upkeepId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+    },
+    "reportExample": {
+      "description": "A report file named in a prompt as a code span: plain path characters only, so that nothing can end the span or start another.",
+      "type": "string",
+      "maxLength": 200,
+      "pattern": "^(?![-/])(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9_.@+/-]+$"
+    },
+    "stagedScript": {
+      "description": "A workspace-relative .mjs script that prepare-run stages: plain path characters only (it travels on a command line as one comma-separated word), no absolute path, no empty, . or .. segment, no leading dash, and a name before the .mjs suffix.",
+      "type": "string",
+      "maxLength": 200,
+      "pattern": "^(?![-/])(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)[A-Za-z0-9_.@+/-]*[A-Za-z0-9_@+-]\\.mjs$"
+    },
+    "factory": {
+      "description": "Optional: where the factory package (the engine that renders and runs this fleet) is installed in this repository, and how the jobs that need it install it. Absent, the engine is in the repository itself and every workflow runs it from $GITHUB_WORKSPACE/src. This is not the AI engine of the workflows (engineAuthMode, engineApiKeySecret).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["package"],
+      "properties": {
+        "package": {
+          "description": "The npm dependency of this repository that holds the factory; it has to be listed in package.json.",
+          "type": "string",
+          "pattern": "^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$",
+          "maxLength": 214
+        },
+        "source": {
+          "description": "github:<owner>/<repo>, the repository that the install token is minted for (no ref: package.json and the lockfile pin the version). Required when private is true.",
+          "type": "string",
+          "pattern": "^github:[A-Za-z0-9][A-Za-z0-9-]*/(?!\\.{1,2}$)[A-Za-z0-9._-]+$"
+        },
+        "private": {
+          "description": "True while the factory repository is private: the jobs that install it mint a read token for it and rewrite npm's git URLs for that repository. False once it is public: the install is the plain npm ci.",
+          "type": "boolean",
+          "default": false
+        },
+        "dir": {
+          "description": "Where the package is installed, relative to the repository root; node_modules/<package> when omitted, and . for the repository root itself.",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "repoSlug": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9-]*/(?!\\.{1,2}$)[A-Za-z0-9._-]+$"
+    },
+    "relativePath": {
+      "type": "string",
+      "pattern": "^(?![/\\\\])(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\\\\\u0000-\\u001f\\u007f]+$"
+    },
+    "globEntry": {
+      "type": "string",
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9_.@+*/-]+$"
+    },
+    "protectedFilesEntry": {
+      "type": "string",
+      "pattern": "^(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9_.@+*/-]+$"
+    },
+    "cron": {
+      "type": "string",
+      "pattern": "^[0-9A-Za-z*/,?#-]+(?: [0-9A-Za-z*/,?#-]+){4}$"
+    },
+    "scopeId": {
+      "description": "A sync scope of an edge: a short lower-case word, so that no shell metacharacter can reach the case pattern of the workflow's first step.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+    },
+    "preflightCheck": {
+      "description": "How the router judges one preflight command: the scope that its drift asks the dispatch for, the classifier that judges it from what it printed (a command run by the router only, with the SDLC_PREFLIGHT_* variables; its exit code is the verdict), and the noop action of an unchanged result.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scope": { "$ref": "#/definitions/scopeId" },
+        "classifier": { "type": "string", "minLength": 1 },
+        "noopAction": { "enum": ["noop-no-material-drift", "noop-unchanged-snapshot"] }
+      }
+    },
+    "commandList": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["projectKey", "repo", "defaultBranch", "driftAudit"],
+      "properties": {
+        "projectKey": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,62}$" },
+        "repo": { "$ref": "#/definitions/repoSlug" },
+        "defaultBranch": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$", "maxLength": 200 },
+        "driftAudit": { "$ref": "#/definitions/driftAudit" },
+        "deconflictInRepoSchedules": {
+          "enum": ["none", "disable-workflow-schedules"],
+          "default": "none"
+        },
+        "deconflictWorkflowIds": {
+          "type": "array",
+          "default": [],
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "autoMerge": { "const": false }
+      },
+      "if": {
+        "required": ["deconflictInRepoSchedules"],
+        "properties": { "deconflictInRepoSchedules": { "const": "disable-workflow-schedules" } }
+      },
+      "then": {
+        "required": ["deconflictWorkflowIds"],
+        "properties": { "deconflictWorkflowIds": { "type": "array", "minItems": 1 } }
+      },
+      "else": {
+        "properties": { "deconflictWorkflowIds": { "type": "array", "maxItems": 0 } }
+      }
+    },
+    "driftAudit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "schedule",
+        "upkeepStrategy",
+        "instructions",
+        "instructionsFile",
+        "knowledgeSources",
+        "buildCommands",
+        "verifyCommands",
+        "draft",
+        "reviewers"
+      ],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "schedule": { "$ref": "#/definitions/cron" },
+        "upkeepStrategy": {
+          "enum": [
+            "content-and-docs-sync",
+            "dependency-and-pattern-modernization",
+            "code-quality-and-improvement-scan",
+            "custom"
+          ]
+        },
+        "instructions": { "type": "string" },
+        "instructionsFile": {
+          "oneOf": [{ "type": "null" }, { "$ref": "#/definitions/relativePath" }]
+        },
+        "knowledgeSources": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["watchUrls", "packageManifests", "mcpServers"],
+          "properties": {
+            "watchUrls": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["url", "label", "kind"],
+                "properties": {
+                  "url": { "type": "string" },
+                  "label": { "type": "string" },
+                  "kind": { "enum": ["changelog", "blog", "docs", "release-notes", "feed"] }
+                }
+              }
+            },
+            "packageManifests": { "type": "array", "items": { "type": "string" } },
+            "mcpServers": { "type": "object" },
+            "citedPages": {
+              "description": "Optional: documentation pages that the target's own files cite. The snapshot step reads every file of the target checkout that matches an include pattern, collects the URLs on the listed hosts that they cite, and snapshots the text of the most cited pages (at most maxPages, default 50), so that a run can tell which cited page changed since the previous one. The hosts are added to network.allowed.",
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["include", "hosts"],
+              "properties": {
+                "include": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/definitions/globEntry" } },
+                "hosts": {
+                  "type": "array",
+                  "minItems": 1,
+                  "uniqueItems": true,
+                  "items": { "type": "string", "pattern": "^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$" }
+                },
+                "maxPages": { "type": "integer", "minimum": 1, "maximum": 200, "default": 50 }
+              }
+            }
+          }
+        },
+        "buildCommands": { "$ref": "#/definitions/commandList" },
+        "verifyCommands": { "$ref": "#/definitions/commandList" },
+        "draft": { "type": "boolean" },
+        "reviewers": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "dedupe": { "$ref": "#/definitions/dedupe" },
+        "stagedScripts": {
+          "description": "Optional: workspace-relative .mjs scripts that the verification commands of the project run after the agent. prepare-run stages them, at the same relative paths and together with the factory's drift/lib and package.json under the factory directory, in a read-only copy under ${RUNNER_TEMP}/gh-aw/sdlc-validator, before the agent starts; the command that verifies compares the workspace copy with the staged one and then runs the staged one. A project that declares none stages nothing.",
+          "type": "array",
+          "uniqueItems": true,
+          "default": [],
+          "items": { "$ref": "#/definitions/stagedScript" }
+        },
+        "agentSandbox": {
+          "description": "Optional: what the agent of the project's drift workflow has inside its sandbox besides what every drift workflow gives it (git, node and the executables of the build commands). installDependencies runs npm ci --ignore-scripts in the target checkout before the agent starts, so that the validators that the agent runs find their packages although the sandbox has no route to the package registry. bashCommands adds executables, each one a bare command name, to the bash allowlist of the agent.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "installDependencies": { "type": "boolean", "default": false },
+            "bashCommands": {
+              "type": "array",
+              "uniqueItems": true,
+              "default": [],
+              "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.+-]*$" }
+            }
+          }
+        }
+      }
+    },
+    "edge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "edgeId",
+        "upstreamRepo",
+        "upstreamKey",
+        "upstreamSlug",
+        "upstreamDefaultBranch",
+        "initialBaselineSha",
+        "downstreamRepo",
+        "mode",
+        "schedule",
+        "onCommitOnlyAdvance",
+        "stateVariable",
+        "provenanceFile",
+        "provenanceJsonPointer",
+        "branchName",
+        "closeOlderKey",
+        "reviewers",
+        "importCommands",
+        "preflightCommands",
+        "acceptCommands",
+        "buildCommands",
+        "verifyCommands",
+        "adaptationInstructions",
+        "allowedFiles",
+        "protectedFilesExclude",
+        "autoMerge",
+        "immutableGates"
+      ],
+      "properties": {
+        "edgeId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,62}$" },
+        "upstreamRepo": { "$ref": "#/definitions/repoSlug" },
+        "upstreamKey": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,62}$" },
+        "upstreamSlug": { "type": "string", "pattern": "^[A-Z0-9_]{1,64}$" },
+        "upstreamDefaultBranch": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$", "maxLength": 200 },
+        "initialBaselineSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "downstreamRepo": { "$ref": "#/definitions/repoSlug" },
+        "mode": { "enum": ["mechanical", "ai-adaptation"] },
+        "schedule": {
+          "oneOf": [{ "type": "null" }, { "$ref": "#/definitions/cron" }]
+        },
+        "onCommitOnlyAdvance": { "enum": ["noop", "bump-provenance"] },
+        "stateVariable": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+        "provenanceFile": { "$ref": "#/definitions/relativePath" },
+        "provenanceJsonPointer": { "type": "string", "pattern": "^(?:/(?:[^/~]|~[01])*)+$" },
+        "branchName": {
+          "type": "string",
+          "pattern": "^(?!.*\\.\\.)(?!.*//)[A-Za-z0-9][A-Za-z0-9._/-]*[A-Za-z0-9_-]$",
+          "maxLength": 200
+        },
+        "closeOlderKey": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$" },
+        "reviewers": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "importCommands": { "$ref": "#/definitions/commandList" },
+        "preflightCommands": { "$ref": "#/definitions/commandList" },
+        "acceptCommands": { "$ref": "#/definitions/commandList" },
+        "buildCommands": { "$ref": "#/definitions/commandList" },
+        "verifyCommands": { "$ref": "#/definitions/commandList" },
+        "adaptationInstructions": { "type": "string" },
+        "allowedFiles": { "type": "array", "items": { "$ref": "#/definitions/globEntry" } },
+        "protectedFilesExclude": { "type": "array", "items": { "$ref": "#/definitions/protectedFilesEntry" } },
+        "maxPatchFiles": {
+          "description": "Optional largest number of files that one cascade pull request may change, rendered as create-pull-request max-patch-files; the handler refuses a larger patch, and its own limit is 100 when this is omitted.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "autoMerge": { "const": false },
+        "syncScopes": {
+          "description": "The workflow_dispatch sync_scope values that this edge's workflow accepts, each an id of the edge's own choosing; both (everything the edge syncs) is reserved and is the only one accepted when this is omitted.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/definitions/scopeId" }
+        },
+        "preflightChecks": {
+          "description": "How the router judges each preflightCommands entry, one entry for each command in the same order: the exit code decides (0 no drift, 1 drift, anything else a failure) unless the entry names a classifier; an entry may name the scope that a drift of its command asks the dispatch for and the noop action that an unchanged result is recorded as. Absent: every command is judged by its exit code and asks for no scope.",
+          "type": "array",
+          "items": { "$ref": "#/definitions/preflightCheck" }
+        },
+        "logProvenance": {
+          "description": "Other provenance files of the downstream whose commit the router logs beside the edge's own provenanceFile; a difference is logged and never decided on.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["file", "pointer"],
+            "properties": {
+              "file": { "$ref": "#/definitions/relativePath" },
+              "pointer": { "type": "string", "pattern": "^(?:/(?:[^/~]|~[01])*)+$" }
+            }
+          }
+        },
+        "installDirectories": {
+          "description": "Optional directories of the downstream checkout, relative to its root, in which a cascade workflow runs npm ci --include=dev; defaults to the root only.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/definitions/relativePath" }
+        },
+        "pythonVersion": {
+          "description": "Optional Python version for Python-based downstream repositories; when set, cascade setup installs Python and runs pip install -e .[dev] instead of npm ci.",
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+(?:\\.\\d+)?$"
+        },
+        "nodeVersion": {
+          "description": "Optional Node.js version that a cascade workflow of this edge sets up (the step is named Set up Node.js <version>); 24 when omitted. An edge that sets pythonVersion sets up no Node.js, so it ignores this.",
+          "type": "string",
+          "pattern": "^[0-9]+(?:\\.[0-9]+){0,2}$"
+        },
+        "setupSteps": {
+          "description": "Optional further setup that a cascade workflow of this edge runs after the dependency installs, in the order listed, for the Node and for the Python path alike: a command, run in the downstream checkout (or in workingDirectory, a directory of it). None: the engine installs nothing beyond the dependencies.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "run"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "run": { "type": "string", "minLength": 1 },
+              "workingDirectory": { "$ref": "#/definitions/relativePath", "description": "A directory of the downstream checkout; the checkout itself (.) when omitted." }
+            }
+          }
+        },
+        "immutableGates": { "$ref": "#/definitions/immutableGates" },
+        "adaptation": { "$ref": "#/definitions/adaptation" }
+      }
+    },
+    "adaptation": {
+      "description": "Optional data of an ai-adaptation edge that the engine and the helper scripts of the orchestrator read: the file names of the preflight reports, the data that the helper scripts keep under helpers, and the globs of the files that the pull-request result reports.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "preflightReports": {
+          "description": "File names, under the artifact directory of the run, of the reports of the preflightCommands, in the order of the commands (each report is also kept as preflight-<n>.txt).",
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" }
+        },
+        "helpers": {
+          "description": "Data of the orchestrator's own helper scripts, one entry for each helper (a name of the adopter's choosing). It is opaque to the engine: a helper script reads its entry through helperSection(document, name) of ai-sdlc-factory/script-kit, which refuses edges that declare the same helper differently. The engine's own keys of adaptation stay closed, so a typo in them is still caught.",
+          "type": "object",
+          "additionalProperties": true
+        },
+        "pullRequestResult": {
+          "description": "Globs of the changed files that the pull-request result reports, by the name that the result gives them: the result has one array for each key, in this order, holding the sorted base names of the matches, without their extension. A key is a plain name that the result does not use itself (outcome, prNumber, prUrl and recordedCommit are the result's own). None: the result has no such array.",
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[a-z][A-Za-z0-9]{0,39}$",
+            "not": { "enum": ["outcome", "prNumber", "prUrl", "recordedCommit"] }
+          },
+          "additionalProperties": { "$ref": "#/definitions/globEntry" }
+        }
+      }
+    },
+    "immutableGates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["zeroDiffPaths"],
+      "properties": {
+        "zeroDiffPaths": { "type": "array", "items": { "$ref": "#/definitions/globEntry" } },
+        "generatedPaths": {
+          "description": "Optional: globs of the files that the downstream generates (a build output that is committed). They are not editable modules of the gate, so the constructs that the gate bans are not looked for in them. Absent: nothing is generated.",
+          "type": "array",
+          "uniqueItems": true,
+          "default": [],
+          "items": { "$ref": "#/definitions/globEntry" }
+        },
+        "lockedTestBlocks": {},
+        "inProcessInvariants": {}
+      }
+    }
+  }
+}

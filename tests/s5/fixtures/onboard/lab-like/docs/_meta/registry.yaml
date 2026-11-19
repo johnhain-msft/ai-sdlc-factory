@@ -1,0 +1,16 @@
+# A teaching registry, not a provenance document; the commit-like key is descriptive data.
+example_commit: 1111111111111111111111111111111111111111
+pace_demo_minutes: brief demonstration time
+pace_session_minutes: guided exercise time
+pace_self_minutes: independent completion time
+labs:
+  lab01:
+    title: Getting started
+    pace_demo_minutes: 7
+    pace_session_minutes: 12
+    pace_self_minutes: 25
+  lab02:
+    title: Working with agents
+    pace_demo_minutes: 7
+    pace_session_minutes: 12
+    pace_self_minutes: 25

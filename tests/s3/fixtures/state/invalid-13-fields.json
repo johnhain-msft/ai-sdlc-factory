@@ -1,0 +1,15 @@
+{
+  "etag": "",
+  "lastObservedHeadSha": "7777777777777777777777777777777777777777",
+  "lastMergedUpstreamSha": "7777777777777777777777777777777777777777",
+  "portfolioMainSha": null,
+  "lastNoopHeadSha": null,
+  "dismissedTargetSha": null,
+  "failedTargetSha": null,
+  "failedAttempts": 0,
+  "blockedTargetSha": null,
+  "inFlightRunId": null,
+  "inFlightTargetSha": null,
+  "openPrTargetSha": null,
+  "openPrNumber": null
+}

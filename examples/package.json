@@ -1,0 +1,8 @@
+{
+  "name": "example-orchestrator",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "ai-sdlc-factory": "github:example-org/ai-sdlc-factory#v0.1.0"
+  }
+}

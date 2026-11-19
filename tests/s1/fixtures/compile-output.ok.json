@@ -1,0 +1,101 @@
+[
+  {
+    "workflow": "cascade-ai-lab-to-hub.md",
+    "valid": true,
+    "errors": [],
+    "warnings": [],
+    "compiled_file": ".github/workflows/cascade-ai-lab-to-hub.lock.yml",
+    "labels": [
+      "automated",
+      "sdlc-cascade",
+      "ai-adapted",
+      "needs-review"
+    ]
+  },
+  {
+    "workflow": "cascade-ai-course-to-hub.md",
+    "valid": true,
+    "errors": [],
+    "warnings": [],
+    "compiled_file": ".github/workflows/cascade-ai-course-to-hub.lock.yml",
+    "labels": [
+      "automated",
+      "sdlc-cascade",
+      "ai-adapted",
+      "needs-review"
+    ]
+  },
+  {
+    "workflow": "cascade-ai-pipelines-to-hub.md",
+    "valid": true,
+    "errors": [],
+    "warnings": [],
+    "compiled_file": ".github/workflows/cascade-ai-pipelines-to-hub.lock.yml",
+    "labels": [
+      "automated",
+      "sdlc-cascade",
+      "ai-adapted",
+      "needs-review"
+    ]
+  },
+  {
+    "workflow": "cascade-mechanical-docs-to-hub.md",
+    "valid": true,
+    "errors": [],
+    "warnings": [],
+    "compiled_file": ".github/workflows/cascade-mechanical-docs-to-hub.lock.yml",
+    "labels": [
+      "automated",
+      "sdlc-cascade",
+      "needs-review"
+    ]
+  },
+  {
+    "workflow": "drift-lab-content.md",
+    "valid": true,
+    "errors": [],
+    "warnings": [],
+    "compiled_file": ".github/workflows/drift-lab-content.lock.yml",
+    "labels": [
+      "automated",
+      "sdlc-drift",
+      "needs-review"
+    ]
+  },
+  {
+    "workflow": "drift-docs-site.md",
+    "valid": true,
+    "errors": [],
+    "warnings": [],
+    "compiled_file": ".github/workflows/drift-docs-site.lock.yml",
+    "labels": [
+      "automated",
+      "sdlc-drift",
+      "needs-review"
+    ]
+  },
+  {
+    "workflow": "drift-agent-kit.md",
+    "valid": true,
+    "errors": [],
+    "warnings": [],
+    "compiled_file": ".github/workflows/drift-agent-kit.lock.yml",
+    "labels": [
+      "automated",
+      "sdlc-drift",
+      "needs-review"
+    ]
+  },
+  {
+    "workflow": "sdlc-onboard.md",
+    "valid": true,
+    "errors": [],
+    "warnings": [],
+    "compiled_file": ".github/workflows/sdlc-onboard.lock.yml",
+    "labels": [
+      "automated",
+      "sdlc-onboard",
+      "needs-review"
+    ]
+  }
+]

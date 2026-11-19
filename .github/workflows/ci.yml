@@ -1,0 +1,241 @@
+# CI of the factory: plain Actions, no secrets, so it is safe for a public repository.
+#
+# - Pull requests run with `pull_request`, never `pull_request_target`: code from a fork never runs with a token that can write.
+# - The workflow token is read-only. Nothing here pushes, comments or publishes.
+# - Every action is pinned by commit SHA; the version that the SHA is, is in the comment after it. Update both together.
+# - `examples-drift` is the one job that compiles with the real gh-aw. It installs the release that examples/.gh-aw-version names.
+# - The Ubuntu legs run for every trigger. The Windows leg takes more than an hour, so a push to a branch leaves it out: a pull request, a release tag and a manual run
+#   include it. It is a job of its own because a job-level condition cannot read the matrix.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: test (ubuntu-latest, node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22", "24"]
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Set a git identity for the tests that commit in a scratch repository
+        run: |
+          git config --global user.name "CI"
+          git config --global user.email "ci@example.invalid"
+      - name: Install the dependencies
+        run: npm ci --ignore-scripts
+      - name: Run the tests
+        run: npm test
+
+  test-windows:
+    name: test (windows-latest, node 24)
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+    runs-on: windows-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+      - name: Set a git identity for the tests that commit in a scratch repository
+        run: |
+          git config --global user.name "CI"
+          git config --global user.email "ci@example.invalid"
+      - name: Install the dependencies
+        run: npm ci --ignore-scripts
+      - name: Run the tests
+        run: npm test
+
+  leak-guard:
+    name: leak-guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the repository with its whole history and its tags
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+      - name: Scan the tracked files
+        run: node tools/leak-guard/scan.mjs --tree
+      # The history of a pull request is the contributor's own, so only what lands on main, and every release tag, is scanned for it.
+      - name: Scan the history, the commit identities and the annotated tags
+        if: github.event_name != 'pull_request'
+        run: node tools/leak-guard/scan.mjs --history
+
+  examples-drift:
+    name: examples-drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+      - name: Read the gh-aw release that the examples are compiled with
+        id: ghaw
+        run: |
+          version="$(tr -d '[:space:]' < examples/.gh-aw-version)"
+          if ! printf '%s' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "examples/.gh-aw-version holds '$version'; it must hold a release tag such as v1.0.1" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Install gh-aw
+        uses: github/gh-aw/actions/setup-cli@0627fdbe4beb5f3b71aa569f8d97150b87f2111a # v1.0.1
+        with:
+          version: ${{ steps.ghaw.outputs.version }}
+      - name: Install the dependencies
+        run: npm ci --ignore-scripts
+      - name: Render the examples and compile them with gh-aw
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh aw version
+          node tools/update-examples.mjs --compile
+      - name: Fail when the committed examples are not what the factory renders and gh-aw compiles
+        run: |
+          git --no-pager diff --stat -- examples
+          git diff --exit-code -- examples
+          untracked="$(git ls-files --others --exclude-standard -- examples)"
+          if [ -n "$untracked" ]; then
+            echo "the render has files that examples/ does not commit:" >&2
+            echo "$untracked" >&2
+            exit 1
+          fi
+      - name: Set a git identity for the tests that commit in a scratch repository
+        run: |
+          git config --global user.name "CI"
+          git config --global user.email "ci@example.invalid"
+      - name: Run the tests that need the real gh-aw compiler
+        env:
+          SDLC_REAL_GH_AW: "1"
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          files="$(grep -rlE 'SDLC_REAL_GH_AW|real-gh-aw\.mjs' tests --include='*.test.mjs' | sort)"
+          node --test --test-concurrency=2 $files
+
+  pack-check:
+    name: pack-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+      - name: Install the dependencies
+        run: npm ci --ignore-scripts
+      - name: List what the package contains
+        run: npm pack --dry-run --ignore-scripts
+      - name: Check the package contents, its scripts and its lockfile
+        run: node --test tests/s5/template-structure.test.mjs
+
+  consumer-smoke:
+    name: consumer-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+      - name: Pack the package
+        run: |
+          mkdir "$RUNNER_TEMP/pack"
+          npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/pack"
+      - name: Install the tarball into a scratch project
+        run: |
+          mkdir "$RUNNER_TEMP/consumer"
+          cd "$RUNNER_TEMP/consumer"
+          npm init -y > /dev/null
+          npm install --ignore-scripts --no-audit --no-fund "$RUNNER_TEMP"/pack/ai-sdlc-factory-*.tgz
+      - name: Run the commands, import the exports and render the examples with the installed package
+        working-directory: ${{ runner.temp }}/consumer
+        env:
+          EXAMPLES: ${{ github.workspace }}/examples
+        run: |
+          npx --no-install sdlc-reconcile --help | grep -F -- '--request <file>'
+          test -e node_modules/.bin/sdlc-bootstrap
+          test -e node_modules/.bin/sdlc-onboard
+          node --input-type=module - <<'EOF'
+          import fs from "node:fs";
+          import path from "node:path";
+
+          const factory = await import("ai-sdlc-factory/reconcile");
+          for (const name of ["buildAcks", "checkRendered", "reconcile", "renderFleet"]) {
+            if (typeof factory[name] !== "function") throw new Error(`ai-sdlc-factory/reconcile does not export ${name}()`);
+          }
+          for (const specifier of ["ai-sdlc-factory/script-kit", "ai-sdlc-factory/drift-lib"]) {
+            if (Object.keys(await import(specifier)).length === 0) throw new Error(`${specifier} exports nothing`);
+          }
+          let blocked = false;
+          try {
+            await import("ai-sdlc-factory/src/reconcile.mjs");
+          } catch (error) {
+            blocked = error.code === "ERR_PACKAGE_PATH_NOT_EXPORTED";
+          }
+          if (!blocked) throw new Error("a deep import into src/ resolved: the exports map must block it");
+
+          const examples = process.env.EXAMPLES;
+          const request = JSON.parse(fs.readFileSync(path.join(examples, "request.reference.json"), "utf8"));
+          const rendered = factory.renderFleet(request, { cwd: examples });
+          if (!rendered.ok) throw new Error(`the installed package refuses examples/: ${JSON.stringify(rendered.result)}`);
+          const different = [...rendered.files].filter(([file, text]) => fs.readFileSync(path.join(examples, file), "utf8") !== text).map(([file]) => file);
+          if (rendered.files.size === 0 || different.length > 0) throw new Error(`the installed package renders examples/ differently from the committed files: ${different.join(", ") || "nothing rendered"}`);
+          console.log(`the installed package renders the ${rendered.files.size} files of examples/ exactly as they are committed`);
+          EOF

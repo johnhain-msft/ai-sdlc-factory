@@ -1,0 +1,50 @@
+{
+  "description": "Synthetic downstream changes for the mechanical gate. The test adds the baseline files of fixtures/git/history.json and materialises every revision in a scratch checkout.",
+  "base": {
+    "package.json": "{}\n",
+    "keep.txt": "a kept file\n",
+    "public/docs/index.json": "{\"revision\":1}\n",
+    "public/docs/obsolete.json": "{\"obsolete\":true}\n",
+    "public/docs/source.json": "{\"commit\":\"{{PREVIOUS_SHA}}\"}\n"
+  },
+  "recordedProvenance": {
+    "public/docs/source.json": "{\"commit\":\"{{UPSTREAM_SHA}}\"}\n"
+  },
+  "agentCommits": {
+    "clean-import": {
+      "set": { "public/docs/index.json": "{\"revision\":2}\n" },
+      "recordsProvenance": true
+    },
+    "delete-inside": {
+      "set": {},
+      "remove": ["public/docs/obsolete.json"],
+      "recordsProvenance": true
+    },
+    "outside-path": {
+      "set": { "src/app.js": "export const app = 2;\n" },
+      "recordsProvenance": true
+    },
+    "lookalike-directory": {
+      "set": { "public/docs-evil/index.json": "{}\n" },
+      "recordsProvenance": true
+    },
+    "lookalike-file": {
+      "set": { "public/docs.txt": "not inside the allowed directory\n" },
+      "recordsProvenance": true
+    },
+    "delete-outside": {
+      "set": {},
+      "remove": ["src/app.js"],
+      "recordsProvenance": true
+    },
+    "move-into-allowed": {
+      "set": { "public/docs/keep.txt": "a kept file\n" },
+      "remove": ["keep.txt"],
+      "recordsProvenance": true
+    }
+  },
+  "importerFailures": [
+    { "trigger": "the source input cannot be read", "stderr": "fatal: cannot read the source input\n" },
+    { "trigger": "the source bundle is incomplete", "stderr": "fatal: the source bundle is incomplete\n" }
+  ]
+}
