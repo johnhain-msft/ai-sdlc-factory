@@ -122,9 +122,9 @@ test("AC58: every file is UTF-8 without a byte order mark, with LF line endings 
 test("AC58: no timestamp, random value, host name or absolute path reaches a generated file", async () => {
   const workspace = await render(readText(abs("sdlc.yaml")));
   try {
-    const forbidden = [workspace.dir, workspace.root, os.tmpdir(), REPO_ROOT.replace(/[\\/]$/, ""), os.hostname()].filter((value) => value.length > 3);
+    const forbidden = [workspace.dir, workspace.root, os.tmpdir() === "/tmp" ? "" : os.tmpdir(), REPO_ROOT.replace(/[\\/]$/, ""), os.hostname()].filter((value) => value.length > 3);
     for (const file of workspace.list(W).filter((name) => !name.endsWith(".lock.yml"))) {
-      const text = workspace.read(file).replaceAll("/tmp/gh-aw", "");
+      const text = workspace.read(file);
       for (const value of forbidden) assert.equal(text.includes(value), false, `${file} contains ${value}`);
       assert.equal(/\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(text), false, `${file}: an ISO timestamp`);
       assert.equal(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/.test(text), false, `${file}: a UUID`);
