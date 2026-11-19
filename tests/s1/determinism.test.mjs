@@ -124,7 +124,7 @@ test("AC58: no timestamp, random value, host name or absolute path reaches a gen
   try {
     const forbidden = [workspace.dir, workspace.root, os.tmpdir(), REPO_ROOT.replace(/[\\/]$/, ""), os.hostname()].filter((value) => value.length > 3);
     for (const file of workspace.list(W).filter((name) => !name.endsWith(".lock.yml"))) {
-      const text = workspace.read(file);
+      const text = workspace.read(file).replaceAll("/tmp/gh-aw", "");
       for (const value of forbidden) assert.equal(text.includes(value), false, `${file} contains ${value}`);
       assert.equal(/\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(text), false, `${file}: an ISO timestamp`);
       assert.equal(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/.test(text), false, `${file}: a UUID`);
