@@ -155,6 +155,70 @@ test("a manifest that the real compiler rejects comes back as status error with 
   }
 });
 
+test("the change policy, the model and the agent sandbox of an edge compile: every policy, a model on drift projects and on edges of both modes, and longer allowlists", { skip }, async () => {
+  const directory = scratchRepository();
+  try {
+    const manifest = presetManifest();
+    const policies = ["corrections-only", "corrections-and-additions", "judgement-and-flag"];
+    const models = ["claude-opus-4.5", "opus", "gpt-5.1-codex", "openai/gpt-5", "copilot/gpt-5"];
+    const expectedModels = new Map();
+    manifest.projects.filter((project) => project.driftAudit.enabled).forEach((project, index) => {
+      project.driftAudit.changePolicy = policies[index % policies.length];
+      project.driftAudit.model = models[index % models.length];
+      expectedModels.set(`drift-${project.projectKey}`, project.driftAudit.model);
+      expectedModels.set(`implement-${project.projectKey}`, project.driftAudit.model);
+    });
+    manifest.dependencyEdges.forEach((edge, index) => {
+      if (index % 2 === 0) edge.model = models[(index + 2) % models.length];
+      edge.agentSandbox = { bashCommands: ["jq", "sed"] };
+      if (edge.model !== undefined) expectedModels.set(`cascade-${edge.mode === "mechanical" ? "mechanical" : "ai"}-${edge.edgeId}`, edge.model);
+    });
+    assert.ok(manifest.dependencyEdges.some((edge) => edge.model !== undefined && edge.mode === "mechanical") && manifest.dependencyEdges.some((edge) => edge.model !== undefined && edge.mode === "ai-adaptation"), "both modes have a model");
+    fs.writeFileSync(path.join(directory, "sdlc.yaml"), toYaml(manifest));
+    fs.cpSync(abs("instructions"), path.join(directory, "instructions"), { recursive: true });
+    fs.cpSync(abs(".github", "aw"), path.join(directory, ".github", "aw"), { recursive: true });
+    const result = await reconcile(referenceRequest(), { cwd: directory, env: process.env });
+    assert.equal(result.status, "ok", JSON.stringify(result.validationResults));
+    assert.equal(result.generatedWorkflows.length, 13);
+    for (const pair of result.generatedWorkflows) {
+      const id = path.posix.basename(pair.lockYml, ".lock.yml");
+      const lock = fs.readFileSync(path.join(directory, pair.lockYml), "utf8");
+      const model = expectedModels.get(id);
+      // without a model the compiler resolves one at run time (an expression); with one, the agent job runs the literal that the manifest names
+      const literal = /^\s+COPILOT_MODEL: (?!\$\{\{)(.+)$/m.exec(lock)?.[1];
+      assert.equal(literal, model, `${id}: the compiler wires a model exactly where the manifest names one`);
+      if (model !== undefined) assert.ok(lock.includes(`GH_AW_ENGINE_MODEL: "${model}"`), `${id}: ${model}`);
+    }
+    const projects = manifest.projects.filter((project) => project.driftAudit.enabled);
+    projects.forEach((project, index) => {
+      const source = fs.readFileSync(path.join(directory, ".github", "workflows", `drift-${project.projectKey}.md`), "utf8");
+      assert.ok(source.includes(`## Change policy: ${policies[index % policies.length]}\n`), project.projectKey);
+    });
+    const aiLock = fs.readFileSync(path.join(directory, ".github", "workflows", "cascade-ai-course-to-hub.lock.yml"), "utf8");
+    assert.ok(aiLock.includes("--allow-tool shell(cd)") && aiLock.includes("--allow-tool shell(jq)"), "the allowlist of the agent of an AI adaptation reaches the compiled command line");
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a model that the schema accepts and the compiler refuses comes back as status error with the compiler's diagnostic, and nothing is written", { skip }, async () => {
+  const directory = scratchRepository();
+  try {
+    const manifest = minimalManifest();
+    manifest.dependencyEdges[0].model = "gpt-5:high";
+    fs.writeFileSync(path.join(directory, "sdlc.yaml"), toYaml(manifest));
+    fs.mkdirSync(path.join(directory, ".github", "aw"), { recursive: true });
+    fs.copyFileSync(abs(".github", "aw", "actions-lock.json"), path.join(directory, ".github", "aw", "actions-lock.json"));
+    const result = await reconcile(referenceRequest(), { cwd: directory, env: process.env });
+    assert.equal(result.status, "error", "the compiler is the check of the identifier: the schema only bounds its characters");
+    const errors = result.validationResults.flatMap((entry) => entry.errors);
+    assert.ok(errors.some((error) => error.startsWith("compile-error: ") && error.includes("engine.model")), errors.join("\n"));
+    assert.equal(fs.existsSync(path.join(directory, ".github", "workflows", "cascade-mechanical-alpha-to-beta.md")), false, "the render is rolled back");
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 for (const [mode, secret, engineId, edgeMode = "mechanical"] of [
   ["copilot-requests", null, "copilot"],
   ["copilot-pat", null, "copilot"],

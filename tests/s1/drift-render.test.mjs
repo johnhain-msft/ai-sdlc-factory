@@ -22,6 +22,7 @@ import {
   withRequest,
 } from "./helpers/fixtures.mjs";
 import { FACTORY_DIR, FACTORY_INSTALL, FACTORY_PATH, FACTORY_SPARSE, FACTORY_TOKEN, fillCommand } from "./helpers/factory.mjs";
+import { CHANGE_POLICIES, renderMinimal, renderPolicy } from "./helpers/policy.mjs";
 import { createWorkspace } from "./helpers/workspace.mjs";
 
 const W = ".github/workflows";
@@ -496,4 +497,136 @@ test("AC27: the engine contains no drift evaluation and makes no network request
   const source = readText(abs("src", "reconcile.mjs"));
   assert.equal(/\bfetch\s*\(|node:https?|node:net\b|node:dns|XMLHttpRequest|WebSocket/.test(source), false);
   assert.equal(/fs\.\w*(write|mkdir|append|copy|rm)\w*\([^)]*\/tmp\/gh-aw/.test(source), false);
+});
+
+// ---- the change policy (projects[].driftAudit.changePolicy): what the drift agent applies, and what its report lists for whom -----------------------------
+
+const policyHeading = (policy) => `## Change policy: ${policy}`;
+/** The line of the report's section list that describes `section` (`- \`## Recommended\`: ...`). */
+const bulletOf = (body, section) => body.split("\n").find((line) => line.startsWith(`- \`${section}\`: `));
+const REPORT_SECTIONS = ["## Summary", "## Recommended", "## Could not confirm", "## For a human", "## Limitations"];
+const ADDITIONS = "content that the sources announce and this repository does not cover yet";
+const ADDITION_EXAMPLES = "a new feature, setting, limit or retirement that deserves a lab step, a slide or a reference note";
+const JUDGEMENT_HEADING = "## Judgement calls — review these";
+
+test("changePolicy: a project without it renders exactly what corrections-only renders, and only the prompt depends on the policy, never the frontmatter", () => {
+  const absent = renderPolicy(undefined);
+  assert.ok(absent.drift.body.includes(policyHeading("corrections-only")), "the default is the narrowest policy");
+  for (const policy of CHANGE_POLICIES) {
+    const rendered = renderPolicy(policy);
+    for (const kind of ["drift", "implement"]) {
+      assert.equal(rendered[kind].frontmatterText, absent[kind].frontmatterText, `${policy} ${kind}: the frontmatter`);
+      if (policy === "corrections-only") assert.equal(rendered[kind].body, absent[kind].body, `${kind}: an explicit corrections-only is the default, to the byte`);
+      else assert.notEqual(rendered[kind].body, absent[kind].body, `${policy} ${kind}: the policy is in the prompt`);
+    }
+    assert.deepEqual([...rendered.files.keys()], [...absent.files.keys()]);
+    for (const [file, text] of rendered.files) if (!/\/(?:drift|implement)-alpha-service\.md$/.test(file)) assert.equal(text, absent.files.get(file), `${policy}: ${file} does not depend on the policy`);
+  }
+});
+
+test("changePolicy corrections-only: the drift run applies corrections only, and lists additions and judgement calls under ## For a human, never under ## Recommended", () => {
+  const { body } = renderPolicy("corrections-only").drift;
+  assert.equal(body.split("## Change policy: ").length - 1, 1, "exactly one policy heading");
+  assert.ok(body.includes(`${policyHeading("corrections-only")}\n\nWithin the limits of the registration instructions, your pull request applies corrections only: a change where a corroborated source contradicts what this repository says. Source-backed additions (${ADDITIONS}) and judgement calls are not applied, and are never listed under \`## Recommended\`: list them under \`## For a human\``));
+  assert.ok(body.indexOf("## Upkeep strategy: ") < body.indexOf(policyHeading("corrections-only")) && body.indexOf(policyHeading("corrections-only")) < body.indexOf("## Watched sources"), "after the registration instructions and the strategy, before the sources");
+  const recommended = bulletOf(body, "## Recommended");
+  assert.match(recommended, /^- `## Recommended`: a task list \(`- \[ \] `\) of the corrections that this run did not change and should be changed, where a corroborated source contradicts this repository\. Each item says what to change, names the files that it concerns and links its source\.$/);
+  assert.doesNotMatch(recommended, /addition|judgement/, "nothing that the implementation leaves alone is recommended");
+  assert.equal(bulletOf(body, "## For a human"), "- `## For a human`: a list of source-backed additions and judgement calls left for a human reviewer, each with what the source announces, the files that it concerns and its source.");
+  const positions = REPORT_SECTIONS.map((section) => body.indexOf(`- \`${section}\`: `));
+  assert.ok(positions.every((at) => at > 0) && positions.every((at, index) => index === 0 || at > positions[index - 1]), `the five sections, For a human between Could not confirm and Limitations: ${positions}`);
+  assert.ok(body.includes("File a drift report when at least one item of the work list is recommended, could not be confirmed or is left for a human, or when this run has a limitation that a human has to know about:"), "an item for a human is a reason to file a report");
+  assert.ok(body.includes("and leaves out `## Recommended`, `## Could not confirm` and `## For a human` when they would be empty:"), "and the section is left out when it would be empty");
+  assert.equal(body.includes("## Judgement calls"), false, "only judgement-and-flag asks for the judgement heading");
+});
+
+test("changePolicy corrections-and-additions: the drift run applies corrections and additions, recommends both when it did not change them, and leaves judgement calls to a human", () => {
+  const { body } = renderPolicy("corrections-and-additions").drift;
+  assert.equal(body.split("## Change policy: ").length - 1, 1);
+  assert.ok(body.includes(`${policyHeading("corrections-and-additions")}\n\nWithin the limits of the registration instructions, your pull request applies source-backed corrections and additions: a correction is a change where a corroborated source contradicts what this repository says, and an addition is ${ADDITIONS} (${ADDITION_EXAMPLES}). Judgement calls are not applied: list them under \`## For a human\``));
+  const recommended = bulletOf(body, "## Recommended");
+  assert.match(recommended, /^- `## Recommended`: a task list \(`- \[ \] `\) of the corrections and additions that this run did not change and should be changed: /);
+  assert.ok(recommended.includes(`additions, ${ADDITIONS} (${ADDITION_EXAMPLES}).`), recommended);
+  assert.doesNotMatch(recommended, /judgement/);
+  assert.equal(bulletOf(body, "## For a human"), "- `## For a human`: a list of source-backed judgement calls left for a human reviewer, each with what the source announces, the files that it concerns and its source.");
+  assert.ok(body.includes("File a drift report when at least one item of the work list is recommended, could not be confirmed or is left for a human, or when this run has a limitation"));
+  assert.ok(body.includes("and leaves out `## Recommended`, `## Could not confirm` and `## For a human` when they would be empty:"));
+  assert.equal(body.includes("## Judgement calls"), false);
+});
+
+test("changePolicy judgement-and-flag: the drift run applies corrections, additions and judgement calls, recommends what it did not change, has no ## For a human, and flags each judgement call in the pull request", () => {
+  const { body } = renderPolicy("judgement-and-flag").drift;
+  assert.equal(body.split("## Change policy: ").length - 1, 1);
+  assert.ok(body.includes(`${policyHeading("judgement-and-flag")}\n\nWithin the limits of the registration instructions, your pull request applies source-backed corrections, additions and judgement calls: a correction is a change where a corroborated source contradicts what this repository says, an addition is ${ADDITIONS} (${ADDITION_EXAMPLES}), and a judgement call is a change that a source supports but that needs a choice which the source does not make for you. Whenever the pull request makes a judgement call, its body has a \`${JUDGEMENT_HEADING}\` heading that lists each judgement call with the files that you changed, the source and the alternatives that you considered.`));
+  const recommended = bulletOf(body, "## Recommended");
+  assert.match(recommended, /^- `## Recommended`: a task list \(`- \[ \] `\) of the corrections, additions and judgement calls that this run did not change and should be changed: /);
+  assert.ok(recommended.includes(`additions, ${ADDITIONS} (${ADDITION_EXAMPLES}); and judgement calls, changes that a source supports but that need a choice which the source does not make for you.`), recommended);
+  assert.equal(body.includes("For a human"), false, "no ## For a human section is rendered, and nothing of the prompt names one");
+  assert.ok(body.includes("File a drift report when at least one item of the work list is recommended or could not be confirmed, or when this run has a limitation"), "the reasons are the ones it always had");
+  assert.ok(body.includes("and leaves out `## Recommended` and `## Could not confirm` when they would be empty:"));
+  const positions = ["## Summary", "## Recommended", "## Could not confirm", "## Limitations"].map((section) => body.indexOf(`- \`${section}\`: `));
+  assert.ok(positions.every((at, index) => at > 0 && (index === 0 || at > positions[index - 1])), `${positions}`);
+});
+
+test("changePolicy: every upkeep strategy gets the policy of its project, after its strategy guidance and before the watched sources", () => {
+  for (const strategy of ["content-and-docs-sync", "dependency-and-pattern-modernization", "code-quality-and-improvement-scan", "custom"]) {
+    for (const policy of CHANGE_POLICIES) {
+      const { body } = renderPolicy(policy, (copy) => (projectOf(copy, "alpha-service").driftAudit.upkeepStrategy = strategy)).drift;
+      const at = body.indexOf(policyHeading(policy));
+      assert.ok(at > body.indexOf("## Registration instructions") && at < body.indexOf("## Watched sources"), `${strategy} ${policy}`);
+      if (strategy !== "custom") assert.ok(at > body.indexOf(`## Upkeep strategy: ${strategy}`), `${strategy} ${policy}: after the strategy`);
+    }
+  }
+});
+
+test("changePolicy: a value outside the three policies is refused by the schema, and the refusal names the key", () => {
+  for (const policy of ["judge-and-flag", "everything", ""]) {
+    const refused = renderMinimal((copy) => (projectOf(copy, "alpha-service").driftAudit.changePolicy = policy));
+    assert.equal(refused.ok, false, JSON.stringify(policy));
+    assert.ok(refused.errors.some((error) => error.startsWith("schema-validation: ") && error.includes("/projects/0/driftAudit/changePolicy")), refused.errors.join("\n"));
+  }
+});
+
+// ---- driftAudit.model: the model of the engine of the drift and of the implementation workflow ------------------------------------------------------------
+
+const withoutModel = (frontmatter) => ({ ...frontmatter, engine: Object.fromEntries(Object.entries(frontmatter.engine).filter(([key]) => key !== "model")) });
+
+test("driftAudit.model is the model of the engine of the drift and of the implementation workflow, and without it no model is rendered and nothing else changes", () => {
+  const plain = renderPolicy(undefined);
+  for (const kind of ["drift", "implement"]) assert.equal("model" in plain[kind].frontmatter.engine, false, `${kind}: no key, no model`);
+  const named = renderPolicy(undefined, (copy) => (projectOf(copy, "alpha-service").driftAudit.model = "claude-opus-4.5"));
+  for (const kind of ["drift", "implement"]) {
+    assert.equal(named[kind].frontmatter.engine.model, "claude-opus-4.5", kind);
+    assert.deepEqual(Object.keys(named[kind].frontmatter.engine), ["id", "model", ...Object.keys(plain[kind].frontmatter.engine).filter((key) => key !== "id")], `${kind}: the model follows the id`);
+    assert.deepEqual(withoutModel(named[kind].frontmatter), plain[kind].frontmatter, `${kind}: the rest of the frontmatter is what it was`);
+    assert.equal(named[kind].body, plain[kind].body, `${kind}: and so is the prompt`);
+  }
+  assert.deepEqual(named.drift.frontmatter.engine.args, plain.drift.frontmatter.engine.args, "the URL permissions of the engine stay");
+  for (const [file, text] of plain.files) if (!/\/(?:drift|implement)-alpha-service\.md$/.test(file)) assert.equal(named.files.get(file), text, `${file}: another workflow does not take the model of a project`);
+});
+
+test("driftAudit.model reaches the engine object of every engine that a request can select, next to its credentials", () => {
+  for (const [secret, engine, variable] of [["ANTHROPIC_API_KEY", "claude", "ANTHROPIC_API_KEY"], ["GEMINI_API_KEY", "gemini", "GEMINI_API_KEY"], ["OPENAI_API_KEY", "codex", "OPENAI_API_KEY"]]) {
+    const rendered = renderMinimal((copy) => {
+      copy.engineApiKeySecret = secret;
+      projectOf(copy, "alpha-service").driftAudit.model = "model-of-the-project";
+    }, withRequest({ engineAuthMode: "api-key" }));
+    assert.ok(rendered.ok, JSON.stringify(rendered.errors));
+    for (const id of ["drift-alpha-service", "implement-alpha-service"]) {
+      assert.deepEqual(rendered.workflow(id).frontmatter.engine, { id: engine, model: "model-of-the-project", env: { [variable]: `\${{ secrets.${secret} }}` } }, `${engine} ${id}`);
+    }
+  }
+  for (const mode of ["copilot-requests", "copilot-pat"]) {
+    const rendered = renderMinimal((copy) => (projectOf(copy, "alpha-service").driftAudit.model = "model-of-the-project"), withRequest({ engineAuthMode: mode }));
+    assert.equal(rendered.workflow("drift-alpha-service").frontmatter.engine.model, "model-of-the-project", mode);
+    assert.equal(rendered.workflow("drift-alpha-service").frontmatter.engine["copilot-sdk"], true, mode);
+  }
+});
+
+test("driftAudit.model that the schema refuses is never rendered: a space, a shell metacharacter, an expression and 129 characters", () => {
+  for (const model of ["two words", "a;b", "a$(b)", "${{ secrets.X }}", "a".repeat(129), "", "-x"]) {
+    const refused = renderMinimal((copy) => (projectOf(copy, "alpha-service").driftAudit.model = model));
+    assert.equal(refused.ok, false, JSON.stringify(model));
+    assert.ok(refused.errors.some((error) => error.includes("/projects/0/driftAudit/model") || error.startsWith("manifest-expression-opener: ")), refused.errors.join("\n"));
+  }
 });

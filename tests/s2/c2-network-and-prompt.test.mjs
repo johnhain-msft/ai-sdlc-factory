@@ -87,11 +87,11 @@ for (const key of DRIFT_KEYS) {
       /read an entry or a page with `curl --fail --silent --show-error --location <url>` whenever its excerpt is not enough to decide, piped into `grep` or `head` when the page is long: `curl` reaches the hosts of the watched URLs and of the cited pages and no other, there is no `web_fetch` tool, and the shell has no `wget` or `gh` and refuses a redirection or a heredoc\./,
       "behind the API proxy there is no web_fetch tool, so the prompt names the one that works",
     );
-    assert.match(body, /## Drift report\n\nFile a drift report when at least one item of the work list is recommended or could not be confirmed, or when this run has a limitation that a human has to know about: a source that could not be fetched, or a possible gap that you could not close\. File it with exactly one `create_issue` call;/, "a failed source or an open gap is never dropped in silence (AC11, AC42)");
+    assert.match(body, /## Drift report\n\nFile a drift report when at least one item of the work list is recommended, could not be confirmed or is left for a human, or when this run has a limitation that a human has to know about: a source that could not be fetched, or a possible gap that you could not close\. File it with exactly one `create_issue` call;/, "a failed source or an open gap is never dropped in silence (AC11, AC42), and neither is an item that only a human can decide");
     assert.ok(body.includes(`a run of the workflow \`implement-${key}\` researches every item under \`## Recommended\` and \`## Could not confirm\` again and opens one pull request that closes the report`), "the agent knows that the report starts its implementation (AC46)");
     assert.match(body, /When there is nothing of that kind \(every item is not relevant or applied by your pull request, every source was fetched and every gap closed\), file no report: call `noop` with one line that says how many items you triaged and which baseline you compared with\. Your pull request lists the items that it applies; the report does not list them again\./);
     assert.ok(body.includes(`Title it \`Drift report: ${key} YYYY-MM-DD\``));
-    const sections = ["## Summary", "## Recommended", "## Could not confirm", "## Limitations"].map((section) => body.indexOf(`- \`${section}\``));
+    const sections = ["## Summary", "## Recommended", "## Could not confirm", "## For a human", "## Limitations"].map((section) => body.indexOf(`- \`${section}\``));
     assert.equal(body.includes("## Applied"), false, "an applied item is in the pull request, so a report never waits on it");
     assert.ok(sections.every((at) => at > 0), "every section is described");
     assert.deepEqual([...sections].sort((a, b) => a - b), sections, "in this order");
@@ -100,7 +100,10 @@ for (const key of DRIFT_KEYS) {
     assert.match(body, /- `## Could not confirm`: a task list \(`- \[ \] `\)/);
     assert.match(body, /Each item says what to change, names the files that it concerns and links its source\./, "an item stands on its own, because the implementation run starts from the report alone");
     for (const gone of ["## Watched-source changes", "## Recommendations"]) assert.equal(body.includes(`- \`${gone}\``), false, `${gone} is gone`);
-    assert.match(body, /content that the sources announce and this repository does not cover yet/, "recommendations include what to add, not only what to fix");
+    // none of the preset's drift projects sets a changePolicy, so each of them has the default: what to add and what is a judgement call is for a human, and is not recommended
+    assert.match(body, /Source-backed additions \(content that the sources announce and this repository does not cover yet\) and judgement calls are not applied, and are never listed under `## Recommended`: list them under `## For a human`/, "an addition is not recommended where the implementation would leave it alone");
+    assert.match(body, /- `## For a human`: a list of source-backed additions and judgement calls left for a human reviewer, each with what the source announces, the files that it concerns and its source\./);
+    assert.doesNotMatch(body, /- `## Recommended`: [^\n]*(?:addition|judgement)/, "so ## Recommended holds corrections only");
     assert.match(body, /In a dry run call neither: `\/tmp\/gh-aw\/agent\/dry-run-proposal\.json` exists already with `null` under `proposal` and `report`; replace the `null` of `report` with the report that you would have filed/);
     assert.match(body, /`report` with the report that you would have filed, `\{ "title": \.\.\., "body": \.\.\. \}`, using the edit tool: the shell of this workflow refuses a redirection or a heredoc\. Leave it `null` when you would have filed none\./, "the dry run names the tool that can write the file");
     assert.ok(

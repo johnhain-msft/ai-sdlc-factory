@@ -326,6 +326,18 @@
               "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.+-]*$" }
             }
           }
+        },
+        "changePolicy": {
+          "description": "Optional: which changes the drift and the implementation agents of the project make themselves, and which they leave to a human. corrections-only (the default): only corrections, where a corroborated source contradicts the repository; source-backed additions and judgement calls go to a For a human section of the drift report. corrections-and-additions: also additions, content that the sources announce and the repository does not cover yet; judgement calls go to For a human. judgement-and-flag: also judgement calls, each listed under a Judgement calls heading of the pull request for the reviewer.",
+          "enum": ["corrections-only", "corrections-and-additions", "judgement-and-flag"],
+          "default": "corrections-only"
+        },
+        "model": {
+          "description": "Optional: the model of the agent of the project's drift and implementation workflows, rendered as the model field of the engine of the workflow. Absent: the engine chooses.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._/:=-]*$"
         }
       }
     },
@@ -455,7 +467,27 @@
           }
         },
         "immutableGates": { "$ref": "#/definitions/immutableGates" },
-        "adaptation": { "$ref": "#/definitions/adaptation" }
+        "adaptation": { "$ref": "#/definitions/adaptation" },
+        "agentSandbox": {
+          "description": "Optional: what the agent of the edge's cascade workflow has inside its sandbox besides what every cascade workflow gives it (a base list of commands that read, git and cd, and the first word of each import, accept and build command; a mechanical edge also has command, echo and node). bashCommands adds executables, each one a bare command name, to the bash allowlist of the agent. curl, gh and wget are refused: the agent publishes only through its create_pull_request safe output.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "bashCommands": {
+              "type": "array",
+              "uniqueItems": true,
+              "default": [],
+              "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.+-]*$" }
+            }
+          }
+        },
+        "model": {
+          "description": "Optional: the model of the agent of the edge's cascade workflow, rendered as the model field of the engine of the workflow. Absent: the engine chooses.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._/:=-]*$"
+        }
       }
     },
     "adaptation": {

@@ -49,6 +49,8 @@ projects:
       verifyCommands: [npm ci, npm test]
       draft: false
       reviewers: [example-reviewer]
+      changePolicy: corrections-and-additions
+      model: opus
   - projectKey: lab-content
     repo: example-org/lab-content
     defaultBranch: main
@@ -130,6 +132,9 @@ dependencyEdges:
     protectedFilesExclude: []
     autoMerge: false
     syncScopes: [both, content-only]
+    agentSandbox:
+      bashCommands: [jq]
+    model: opus
     immutableGates:
       zeroDiffPaths: [kernel]
       generatedPaths: ["dist/**"]
@@ -207,6 +212,20 @@ The scheduled upkeep of a project. Enabling it renders two workflows: `drift-<pr
 | `projects[].driftAudit.agentSandbox` | object | no | — | What the agent has inside its sandbox besides git, node and the executables of the build commands. |
 | `projects[].driftAudit.agentSandbox.installDependencies` | boolean | no | `false` | Run `npm ci --ignore-scripts` in the target checkout before the agent starts, so that the validators it runs find their packages: the sandbox has no route to the package registry. Example: `true`. |
 | `projects[].driftAudit.agentSandbox.bashCommands` | array of string | no | `[]` | Executables, as bare names, to add to the bash allowlist of the agent. `curl`, `gh` and `wget` are refused: the agent publishes only through its safe outputs. Example: `["jq"]`. |
+| `projects[].driftAudit.changePolicy` | enum: `corrections-only`, `corrections-and-additions`, `judgement-and-flag` | no | `corrections-only` | Which changes the drift and implementation agents make themselves, and which they leave for a human. It works within your registration instructions and never widens them. See [change policies](#change-policies). Example: `corrections-and-additions`. |
+| `projects[].driftAudit.model` | string | no | — | The model of the agent of both workflows, rendered as the `model` of the gh-aw engine: 1 to 128 characters, letters, digits and `._/:=-`, starting with a letter or a digit. The schema only bounds the characters: gh-aw checks the identifier itself when it compiles, and refuses one that it does not accept (a `:` in a plain model name, for example). The implementation workflow takes the model of its drift workflow. Absent: the engine chooses. Example: `opus`. |
+
+#### Change policies
+
+A drift report starts an implementation run, so the two workflows have to agree on which items of the report are work. `changePolicy` says so, for every `upkeepStrategy`. Under every policy a change has to be backed by a corroborated source, and the agents stay within your registration instructions: an instruction such as "never rewrite prose" holds under all three.
+
+| Policy | The pull request applies | The drift report lists |
+| --- | --- | --- |
+| `corrections-only` (the default) | Corrections: a change where a corroborated source contradicts what the repository says. | The corrections that the run did not change, under `## Recommended`. Source-backed additions and judgement calls, under `## For a human`. |
+| `corrections-and-additions` | Corrections and additions: content that the sources announce and the repository does not cover yet, such as a new feature, setting, limit or retirement that deserves a lab step, a slide or a reference note. | The corrections and additions that the run did not change, under `## Recommended`. Judgement calls, under `## For a human`. |
+| `judgement-and-flag` | Corrections, additions and judgement calls (changes that a source supports but that need a choice that it does not make). A pull request that makes a judgement call has a `## Judgement calls — review these` heading that lists each one with the files changed, the source and the alternatives considered. | The corrections, additions and judgement calls that the run did not change, under `## Recommended`. There is no `## For a human` section. |
+
+`## For a human` is left out when it would be empty. It is a reason to file a report, but the implementation workflow treats it as work for a person: it works on `## Recommended` and `## Could not confirm`, and a report with nothing under either ends without a pull request. Every pull request still goes to a reviewer; no policy merges anything.
 
 ### Edges
 
@@ -255,6 +274,9 @@ An edge follows an upstream repository and delivers its changes to a downstream 
 | `dependencyEdges[].setupSteps[].name` | string | yes | — | The step's name. Example: `Install the browser`. |
 | `dependencyEdges[].setupSteps[].run` | string | yes | — | The command. Example: `npx playwright install --with-deps chromium`. |
 | `dependencyEdges[].setupSteps[].workingDirectory` | string | no | — | A directory of the downstream checkout; the checkout itself when absent. Example: `apps/site`. |
+| `dependencyEdges[].agentSandbox` | object | no | — | What the agent of the edge's cascade workflow has inside its sandbox besides its default list: a base list of commands that read, `git` and `cd` (a mechanical edge also has `command`, `echo` and `node`), and the first word of each import, accept and build command. |
+| `dependencyEdges[].agentSandbox.bashCommands` | array of string | no | `[]` | Executables, as bare names, to add to the bash allowlist of the agent. `curl`, `gh` and `wget` are refused: the agent publishes only through its `create_pull_request` safe output. Example: `["jq"]`. |
+| `dependencyEdges[].model` | string | no | — | The model of the agent of the edge's cascade workflow, rendered as the `model` of the gh-aw engine, with the same form as `projects[].driftAudit.model`. Absent: the engine chooses. Example: `opus`. |
 
 #### Preflight checks
 
@@ -357,7 +379,7 @@ The reconciler also refuses a manifest for these reasons. The rule id is the tex
 | `drift-strategy-fragment` | the built-in prompt for the strategy cannot be read. |
 | `drift-watch-url-invalid` | a watched URL is not an absolute HTTPS URL, or has a wildcard host. |
 | `drift-verify-commands-missing` | an enabled project has no runnable verify command. |
-| `drift-bash-command-forbidden` | `agentSandbox.bashCommands` lists `curl`, `gh` or `wget`. |
+| `drift-bash-command-forbidden` | `agentSandbox.bashCommands`, of a project or of an edge, lists `curl`, `gh` or `wget`. |
 | `dedupe-upkeep-duplicate`, `dedupe-strategy-upkeep-unknown` | an upkeep id is used twice in a block, or `strategyUpkeep` names an upkeep that the block does not declare. |
 | `factory-source-required` | `factory.private` is `true` and there is no `source`. |
 | `factory-dir-invalid` | `factory.dir` is not a plain repository-relative path, or `private` is `true` while the directory is the repository itself. |

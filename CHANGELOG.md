@@ -6,9 +6,36 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+The drift, implementation and AI-adaptation agents act on what they find instead of deferring it, and the manifest gains a policy, a model and a sandbox for them. Every new key is optional.
+
+### Added
+
+- **`projects[].driftAudit.changePolicy`**: which changes the drift and implementation agents of a project make themselves, and which they leave for a human. One of:
+  - `corrections-only` (the default): only corrections, where a corroborated source contradicts the repository. Source-backed additions (content that the sources announce and the repository does not cover yet) and judgement calls are applied by neither workflow.
+  - `corrections-and-additions`: also additions, such as a new feature, setting, limit or retirement that deserves a lab step, a slide or a reference note. Judgement calls stay for a human.
+  - `judgement-and-flag`: also judgement calls. A pull request that makes one has a `## Judgement calls — review these` heading that lists each of them with the files changed, the source and the alternatives considered.
+
+  See [change policies](docs/manifest.md#change-policies).
+- **`## For a human` in the drift report**, under `corrections-only` and `corrections-and-additions`: a list of what the policy leaves for a reviewer. It is omitted when it would be empty, and the drift run files a report for it even when nothing else qualifies. The implementation workflow leaves it alone: a report with nothing under `## Recommended` or `## Could not confirm` ends without a pull request.
+- **`projects[].driftAudit.model` and `dependencyEdges[].model`**: the model of the agent, rendered as the `model` field of the gh-aw engine object (`engine: { id: copilot, model: opus }`), whichever engine the request selects. The implementation workflow of a project uses the model of its drift workflow. Without the key nothing is rendered and the engine chooses its own, as before.
+- **`dependencyEdges[].agentSandbox.bashCommands`**: executables, as bare names, that the agent of the edge's cascade workflow may run besides its default list. The `drift-bash-command-forbidden` rule now refuses `curl`, `gh` and `wget` here too.
+
+### Changed
+
+- **The drift and implementation prompts agree on what is actionable.** A drift report used to list additions and judgement calls under `## Recommended`, which starts an implementation run, and that run was told to leave exactly those alone. Both prompts are now rendered from the policy of the project, so `## Recommended` holds what the implementation applies. With no `changePolicy`, additions and judgement calls move from `## Recommended` to the new `## For a human`.
+- **The `content-and-docs-sync` guidance** now reads "keep them in step with what a corroborated source supports", where it said "update only what a corroborated source contradicts": the policy decides what that covers, not the guidance. A project that keeps its own `prompts/drift/strategy-content-and-docs-sync.md` is unchanged.
+- **The implementation run opens every source.** It opens the source of every `## Recommended` and `## Could not confirm` item before it decides the item, and leaves one undecided only on a fetch failure whose error it quotes. It used to be allowed to skip an item whose page it had not opened, as long as it said so.
+- **The agent of an AI-adaptation cascade may run `cd`**, which its prompt tells it to start its commands with, and its prompt now says that the shell refuses a redirection or a heredoc, so files are written with the edit tool.
+
 ### Fixed
 
 - **`sdlc-bootstrap` and `sdlc-onboard` accept a manifest or an `--instructions` file reached through a symbolic link or a Windows 8.3 short path.** They compared the working copy that git reports, which is canonical, with the path as it was given, and refused such a file as outside the repository (`manifest-path-invalid`, or `--instructions … names a file outside the working copy`). Both paths are now resolved to their canonical form first.
+
+### Migration
+
+Existing manifests remain schema-valid without edits, and the default `changePolicy` (`corrections-only`) applies to every upkeep strategy. A project whose instructions ask its agents for more than corrections (new content, upgrades, improvements) sets `changePolicy: corrections-and-additions`, or `judgement-and-flag` to have them make judgement calls as well.
+
+Run `sdlc-reconcile` and commit the regenerated workflows: the prompts and lock metadata of the drift, implementation and AI-adaptation workflows differ, and the locks of the AI-adaptation workflows also allow `cd`.
 
 ## [0.1.0] - 2026-11-19
 

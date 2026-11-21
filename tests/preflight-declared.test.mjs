@@ -485,9 +485,9 @@ test("the engine names no kind of command, no scope and no helper of an adopter:
   const scopeIds = (source) => [...source.matchAll(/(["'`])([a-z0-9]+(?:-[a-z0-9]+)*-(?:only|runs))\1/g)].map((match) => match[2]);
   assert.deepEqual(scopeIds('const scopes = ["pages-only", \'snapshots-runs\', `views-only`];'), ["pages-only", "snapshots-runs", "views-only"]);
   assert.deepEqual(scopeIds('const description = "read only when requested";'), []);
-  // These are engine literals, not sync scopes: a gh-aw detection mode and a CLI option.
+  // These are engine literals, not sync scopes: a gh-aw detection mode, the default change policy of a project's drift audit, and a CLI option.
   const nonScopes = new Map([
-    ["src/reconcile.mjs", new Set(["status-only"])],
+    ["src/reconcile.mjs", new Set(["status-only", "corrections-only"])],
     ["src/drift/previous-watch-index.mjs", new Set(["max-runs"])],
   ]);
   const walk = (relative) => {

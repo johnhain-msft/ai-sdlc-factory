@@ -206,11 +206,11 @@ test("AC4: an edge carries every key of AC33 except onBots, plus the policy keys
   }
 });
 
-test("AC21: driftAudit has ten required typed fields and optional agentSandbox, stagedScripts and dedupe", () => {
+test("AC21: driftAudit has ten required typed fields and optional agentSandbox, stagedScripts, dedupe, changePolicy and model", () => {
   const audit = schema.definitions.driftAudit;
   const fields = ["enabled", "schedule", "upkeepStrategy", "instructions", "instructionsFile", "knowledgeSources", "buildCommands", "verifyCommands", "draft", "reviewers"];
   assert.deepEqual([...audit.required].sort(), [...fields].sort());
-  assert.deepEqual(Object.keys(audit.properties).sort(), [...fields, "agentSandbox", "stagedScripts", "dedupe"].sort());
+  assert.deepEqual(Object.keys(audit.properties).sort(), [...fields, "agentSandbox", "stagedScripts", "dedupe", "changePolicy", "model"].sort());
   for (const field of fields) {
     rejectsNaming(mutate(base(), (copy) => delete firstProject(copy).driftAudit[field]), field);
   }
@@ -243,6 +243,75 @@ test("AC21: agentSandbox is optional; installDependencies is a boolean and bashC
     assert.ok(!accepts(withSandbox(bad)), JSON.stringify(bad));
   }
   rejectsNaming(withSandbox({ unexpectedKey: true }), "additionalProperties unexpectedKey");
+});
+
+test("changePolicy is an optional key of driftAudit: one of three policies, corrections-only when it is absent", () => {
+  const property = schema.definitions.driftAudit.properties.changePolicy;
+  assert.deepEqual(property.enum, ["corrections-only", "corrections-and-additions", "judgement-and-flag"]);
+  assert.equal(property.default, "corrections-only");
+  assert.equal(schema.definitions.driftAudit.required.includes("changePolicy"), false);
+  assert.ok(accepts(base()), "a project without it is valid");
+  const withPolicy = (value) => mutate(base(), (copy) => (firstProject(copy).driftAudit.changePolicy = value));
+  for (const good of property.enum) assert.ok(accepts(withPolicy(good)), good);
+  for (const bad of ["judge-and-flag", "judgement", "everything", "Corrections-Only", "corrections-only ", "", null, 1, true, ["corrections-only"], {}]) {
+    assert.ok(!accepts(withPolicy(bad)), JSON.stringify(bad));
+  }
+  rejectsNaming(withPolicy("everything"), "/projects/0/driftAudit/changePolicy enum");
+  rejectsNaming(mutate(base(), (copy) => (firstProject(copy).changePolicy = "corrections-only")), "additionalProperties changePolicy");
+  rejectsNaming(mutate(base(), (copy) => (firstEdge(copy).changePolicy = "corrections-only")), "additionalProperties changePolicy");
+});
+
+const MODEL_PATTERN = "^[A-Za-z0-9][A-Za-z0-9._/:=-]*$";
+
+test("model is an optional key of driftAudit and of an edge: one to 128 characters from [A-Za-z0-9._/:=-], the first a letter or a digit", () => {
+  for (const [name, node] of [["driftAudit", schema.definitions.driftAudit.properties.model], ["edge", schema.definitions.edge.properties.model]]) {
+    assert.deepEqual([node.type, node.minLength, node.maxLength, node.pattern], ["string", 1, 128, MODEL_PATTERN], name);
+    assert.equal("default" in node, false, `${name}: no model is rendered unless one is named`);
+  }
+  assert.equal(schema.definitions.driftAudit.required.includes("model"), false);
+  assert.equal(schema.definitions.edge.required.includes("model"), false);
+  const setters = {
+    driftAudit: (manifest, value) => (firstProject(manifest).driftAudit.model = value),
+    edge: (manifest, value) => (firstEdge(manifest).model = value),
+  };
+  for (const [name, set] of Object.entries(setters)) {
+    const withModel = (value) => mutate(base(), (copy) => set(copy, value));
+    for (const good of ["opus", "claude-opus-4.5", "gpt-5.1-codex", "openai/gpt-5", "gemini-2.5-pro:latest", "o3=high", "7", "a", "a".repeat(128)]) {
+      assert.ok(accepts(withModel(good)), `${name}: ${good}`);
+    }
+    const bad = [
+      "", "a".repeat(129), "-opus", ".opus", "_opus", "/opus", ":opus", "=opus", "two words", "opus\n", "opus\r", "tab\tbed", "a;b", "a$b", "a`b", "a'b", 'a"b', "a|b", "a&b", "a(b)", "a{b}", "a<b", "a\\b",
+      "${{ secrets.X }}", "né", 7, null, true, {}, ["opus"],
+    ];
+    for (const value of bad) assert.ok(!accepts(withModel(value)), `${name}: ${JSON.stringify(value)}`);
+  }
+  rejectsNaming(mutate(base(), (copy) => (firstEdge(copy).model = "two words")), "/dependencyEdges/0/model pattern");
+  rejectsNaming(mutate(base(), (copy) => (firstProject(copy).driftAudit.model = "a".repeat(129))), "/projects/0/driftAudit/model maxLength");
+  rejectsNaming(mutate(base(), (copy) => (firstProject(copy).model = "opus")), "additionalProperties model");
+});
+
+test("an edge's agentSandbox is optional, of either mode, and holds bashCommands alone: a list of distinct bare command names", () => {
+  const sandbox = schema.definitions.edge.properties.agentSandbox;
+  assert.equal(sandbox.type, "object");
+  assert.equal(sandbox.additionalProperties, false);
+  assert.deepEqual(Object.keys(sandbox.properties), ["bashCommands"], "an edge installs no dependencies for its agent: the cascade workflow has its own setup");
+  assert.deepEqual([sandbox.properties.bashCommands.type, sandbox.properties.bashCommands.uniqueItems, sandbox.properties.bashCommands.default], ["array", true, []]);
+  assert.equal(sandbox.properties.bashCommands.items.pattern, schema.definitions.driftAudit.properties.agentSandbox.properties.bashCommands.items.pattern, "the same bare names as the sandbox of a drift audit");
+  assert.equal(schema.definitions.edge.required.includes("agentSandbox"), false);
+  for (const mode of ["mechanical", "ai-adaptation"]) {
+    const withSandbox = (value) => mutate(base(), (copy) => Object.assign(firstEdge(copy), { mode, agentSandbox: value }));
+    for (const good of [{}, { bashCommands: [] }, { bashCommands: ["jq"] }, { bashCommands: ["awk", "python3", "g++", "7z", "x.y", "a_b", "c-d"] }]) {
+      assert.ok(accepts(withSandbox(good)), `${mode}: ${JSON.stringify(good)}`);
+    }
+    for (const bad of [
+      { installDependencies: true }, { installDependencies: false }, { unexpectedKey: true }, { bashCommands: "awk" }, { bashCommands: [1] }, { bashCommands: [""] },
+      { bashCommands: ["*"] }, { bashCommands: ["awk -F"] }, { bashCommands: ["/usr/bin/awk"] }, { bashCommands: ["./awk"] }, { bashCommands: ["a;b"] }, { bashCommands: ["-x"] },
+      { bashCommands: ["awk", "awk"] }, ["jq"], "jq", null, true,
+    ]) {
+      assert.ok(!accepts(withSandbox(bad)), `${mode}: ${JSON.stringify(bad)}`);
+    }
+    rejectsNaming(withSandbox({ unexpectedKey: true }), "additionalProperties unexpectedKey");
+  }
 });
 
 test("AC21: watchUrls entries need url, label and a known kind; kind podcast is rejected", () => {

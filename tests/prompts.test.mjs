@@ -31,8 +31,11 @@ function failures(t, mutate) {
 }
 const body = (files, id) => bodyOf(files.get(`.github/workflows/${id}.md`));
 
-// An example's legacy sentences: both reports named, and a custom description of the adapted files.
-const LEGACY_DRIFT = "When the registration instructions above define a report of their own (such as `reports/audit-report.md` or `reports/improvement-report.md`), write that report as they say on every run, a dry run and a run that changes nothing included, because the checks that run after you look for it; the body of the issue is that report followed by the sections below other than `## Summary`. Otherwise the body has these sections, in this order, and leaves out `## Recommended` and `## Could not confirm` when they would be empty:";
+// An example's legacy sentences: both reports named, and a custom description of the adapted files. The report sections that the drift sentence leaves out when they are
+// empty are the ones of the change policy: under the default, corrections-only, ## For a human is one of them; under judgement-and-flag there is no such section.
+const driftSentence = (leftOut) => `When the registration instructions above define a report of their own (such as \`reports/audit-report.md\` or \`reports/improvement-report.md\`), write that report as they say on every run, a dry run and a run that changes nothing included, because the checks that run after you look for it; the body of the issue is that report followed by the sections below other than \`## Summary\`. Otherwise the body has these sections, in this order, and leaves out ${leftOut} when they would be empty:`;
+const LEGACY_DRIFT = driftSentence("`## Recommended`, `## Could not confirm` and `## For a human`");
+const LEGACY_DRIFT_WITHOUT_FOR_A_HUMAN = driftSentence("`## Recommended` and `## Could not confirm`");
 const LEGACY_IMPLEMENT = "When the registration instructions define a report of their own (such as `reports/audit-report.md` or `reports/improvement-report.md`), write it as they say, because the checks that run after you look for it.";
 const LEGACY_PULL_REQUEST = "Its body lists `previous_sha..upstream_sha`, the `correlation_id` of `dispatch-inputs.json`, the adapted pages and views, and anything a reviewer must check by hand.";
 const KNOBS = { reportExamples: ["reports/audit-report.md", "reports/improvement-report.md"], pullRequestBodyItems: "the adapted pages and views" };
@@ -44,6 +47,17 @@ test("with two prompt knobs the three declared sentences are reproduced byte for
   for (const id of ["drift-docs-site", "drift-lab-content"]) assert.ok(body(files, id).includes(LEGACY_DRIFT), id);
   for (const id of ["implement-docs-site", "implement-lab-content"]) assert.ok(body(files, id).includes(LEGACY_IMPLEMENT), id);
   assert.ok(body(files, "cascade-ai-lab-to-hub").includes(LEGACY_PULL_REQUEST));
+});
+
+test("the drift sentence names the report sections of the change policy: one more under corrections-only and corrections-and-additions, which have a ## For a human, than under judgement-and-flag", (t) => {
+  for (const [policy, sentence] of [["corrections-only", LEGACY_DRIFT], ["corrections-and-additions", LEGACY_DRIFT], ["judgement-and-flag", LEGACY_DRIFT_WITHOUT_FOR_A_HUMAN]]) {
+    const files = render(t, (manifest) => {
+      manifest.prompts = structuredClone(KNOBS);
+      manifest.projects[0].driftAudit.changePolicy = policy;
+    });
+    assert.ok(body(files, "drift-docs-site").includes(sentence), policy);
+    assert.equal(body(files, "drift-docs-site").includes(sentence === LEGACY_DRIFT ? LEGACY_DRIFT_WITHOUT_FOR_A_HUMAN : LEGACY_DRIFT), false, `${policy}: only its own sentence`);
+  }
 });
 
 test("with no prompts block the prompts contain no adopter report paths or custom adapted-file wording", (t) => {

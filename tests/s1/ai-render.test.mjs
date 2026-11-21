@@ -317,3 +317,40 @@ test("AC51: the AI workflows render no write to SDLC_SYNC_STATE outside the two 
     assert.equal(/SDLC_SYNC_STATE|update-poll-state|gh variable/.test(JSON.stringify(outside) + body), false, identity.edgeId);
   }
 });
+
+// ---- the shell of the agent: what it may run, and what its prompt says about it -------------------------------------------------------------------------
+
+/** The first word of a command, as the renderer takes it for the allowlist: after any VARIABLE=value prefix, when it is a plain name or path. */
+const firstWordOf = (command) => command.trim().split(/\s+/).find((token) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(token));
+const BASE_BASH = ["cat", "date", "find", "git", "grep", "head", "ls", "tail", "wc"];
+
+test("the agent of an AI adaptation may run cd, as the block of its commands begins with it, and git, the base list and the first word of each accept and build command, and never curl, gh or wget", () => {
+  const rendered = renderFleet(request, { cwd: PRESET_ROOT });
+  for (const identity of IDENTITIES) {
+    const edge = edgeOf(preset, identity.edgeId);
+    const words = [...edge.importCommands, ...edge.acceptCommands, ...edge.buildCommands].map(firstWordOf).filter((word) => /^[A-Za-z0-9_.+/-]+$/.test(word));
+    const expected = [...new Set([...BASE_BASH, "cd", "git", ...words])].sort();
+    for (const { frontmatter, body } of [workflowOf(identity), parseWorkflow(rendered.files.get(`${W}/cascade-ai-${identity.edgeId}.md`))]) {
+      assert.deepEqual(frontmatter.tools.bash, expected, identity.edgeId);
+      assert.ok(frontmatter.tools.bash.includes("cd"), `${identity.edgeId}: the prompt starts its commands with a cd that a list without cd would refuse`);
+      assert.ok(body.includes(`cd "$GITHUB_WORKSPACE/${identity.downstream}"`), `${identity.edgeId}: the cd that the allowlist has to permit`);
+      for (const tool of ["gh", "curl", "wget", "*"]) assert.equal(frontmatter.tools.bash.includes(tool), false, `${identity.edgeId}: ${tool}`);
+    }
+  }
+});
+
+test("the prompt of an AI adaptation says that its shell refuses a redirection or a heredoc, and that files are written with the edit tool: one bullet under Rules, after the others", () => {
+  const BULLET = "- The shell of this workflow refuses a redirection or a heredoc; write files with the edit tool.";
+  const rendered = renderFleet(request, { cwd: PRESET_ROOT });
+  for (const identity of IDENTITIES) {
+    for (const { body } of [workflowOf(identity), parseWorkflow(rendered.files.get(`${W}/cascade-ai-${identity.edgeId}.md`))]) {
+      const rules = body.slice(body.indexOf("## Rules\n"));
+      assert.ok(rules.startsWith("## Rules\n"), identity.edgeId);
+      const bullets = rules.split("\n").filter((line) => line.startsWith("- "));
+      assert.equal(bullets.at(-1), BULLET, `${identity.edgeId}: the last rule`);
+      assert.equal(body.split(BULLET).length - 1, 1, `${identity.edgeId}: once`);
+      assert.ok(bullets.length >= 4 && bullets.slice(0, 3).every((line) => line !== BULLET), `${identity.edgeId}: the three rules that it always had come first`);
+    }
+  }
+  assert.ok("edit" in workflowOf(IDENTITIES[0]).frontmatter.tools, "and it has the edit tool that the rule sends it to");
+});

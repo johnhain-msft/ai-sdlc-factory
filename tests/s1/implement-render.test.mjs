@@ -18,6 +18,7 @@ import {
   toYaml,
 } from "./helpers/fixtures.mjs";
 import { FACTORY_DIR, FACTORY_INSTALL, FACTORY_PATH, FACTORY_TOKEN } from "./helpers/factory.mjs";
+import { CHANGE_POLICIES, renderPolicy } from "./helpers/policy.mjs";
 import { createWorkspace } from "./helpers/workspace.mjs";
 
 const W = ".github/workflows";
@@ -160,11 +161,12 @@ test("SPEC-02 AC45: the prompt starts from the report, treats it as data, implem
       "`/tmp/gh-aw/agent/open-pr-dedup.json`",
       "When `duplicate` is `true`, a pull request of this repository's own schedule is open for the same upkeep",
       "gives you nothing to do: call `noop` and stop",
+      "The items under `## For a human` are for a human and not for this workflow, so a report that lists no item under `## Recommended` or `## Could not confirm`",
       "`curl --fail --silent --show-error --location <url>`",
       "there is no `web_fetch` tool",
       "it is opened ready for review, not as a draft",
       "A comment goes to the report and nowhere else.",
-      "Decide an item only after you have read its source: an item whose page you did not open is not done for that reason, and you say so.",
+      "Open the source of every `## Recommended` and `## Could not confirm` item before deciding it, and leave an item undecided only on a fetch failure whose error is quoted.",
       "or not done, with the reason: what the source says, why the instructions do not ask for the change, or the error that stopped the fetch;",
       "commit your changes to the branch `implement-report-<number>`",
       "the last line `Closes #<number>`",
@@ -175,6 +177,7 @@ test("SPEC-02 AC45: the prompt starts from the report, treats it as data, implem
       "Where they name a working branch, a pull request body, a draft or a dry-run file",
     ]) assert.ok(body.includes(text), `${key}: ${text}`);
     assert.equal(body.includes("openPullRequests"), false, "an open implementation stops the run before the agent (read-report.mjs)");
+    assert.equal(body.includes("an item whose page you did not open is not done for that reason"), false, `${key}: an item cannot be skipped because its page was not opened`);
     const order = ["## Registration instructions", "## The report", "## Pull request", "## Build commands", "## Operating rules"].map((heading) => body.indexOf(heading));
     assert.ok(order.every((at) => at > 0), `${key}: every section is there`);
     assert.deepEqual([...order].sort((a, b) => a - b), order, `${key}: in this order`);
@@ -229,5 +232,76 @@ test("AC72: a minimal fleet renders the implementation workflow of its one drift
     assert.match(frontmatter["pre-agent-steps"][1].run, / --project-key alpha-service --author /);
   } finally {
     workspace.cleanup();
+  }
+});
+
+// ---- the change policy (projects[].driftAudit.changePolicy): the same policy in the prompt of the implementation as in the prompt of the drift run -----------
+
+const ADDITIONS = "content that the sources announce and this repository does not cover yet";
+const ADDITION_EXAMPLES = "a new feature, setting, limit or retirement that deserves a lab step, a slide or a reference note";
+const JUDGEMENT_HEADING = "## Judgement calls — review these";
+const LISTING = "lists each judgement call with the files that you changed, the source and the alternatives that you considered";
+const stepThree = (body) => body.split("\n").find((line) => line.startsWith("3. "));
+const bulletOf = (body, section) => body.split("\n").find((line) => line.startsWith(`- \`${section}\`: `));
+
+test("changePolicy corrections-only (the default): step 3 applies corrections only and leaves additions and judgement calls as they are", () => {
+  const absent = renderPolicy(undefined).implement.body;
+  const { body } = renderPolicy("corrections-only").implement;
+  assert.equal(body, absent, "the default");
+  assert.equal(stepThree(body), `3. Apply corrections only, within the limits of the registration instructions: change what a corroborated source contradicts. When the source does not support the change, when the instructions do not ask for it, when it is an addition (${ADDITIONS}) or when the right change is a judgement call, leave the text as it is and say which of these it is in the pull request.`);
+  assert.equal(body.includes("## Judgement calls"), false, "no judgement heading in a pull request that makes no judgement call");
+  assert.ok(body.includes("- a body with one entry for each item of the report: done, with what changed, the files and the source; or not done, with the reason: what the source says, why the instructions do not ask for the change, or the error that stopped the fetch;"));
+});
+
+test("changePolicy corrections-and-additions: step 3 applies corrections and additions and leaves judgement calls as they are", () => {
+  const { body } = renderPolicy("corrections-and-additions").implement;
+  assert.equal(stepThree(body), `3. Change what the sources support, within the limits of the registration instructions: corrections, where a corroborated source contradicts what this repository says, and additions, ${ADDITIONS} (${ADDITION_EXAMPLES}). When the source does not support the change, when the instructions do not ask for it or when the right change is a judgement call, leave the text as it is and say which of these it is in the pull request.`);
+  assert.equal(body.includes("## Judgement calls"), false);
+});
+
+test("changePolicy judgement-and-flag: step 3 also applies judgement calls, and the pull request lists each of them under a heading for the reviewer, before its last line", () => {
+  const { body } = renderPolicy("judgement-and-flag").implement;
+  assert.equal(stepThree(body), `3. Change what the sources support, within the limits of the registration instructions: corrections, where a corroborated source contradicts what this repository says; additions, ${ADDITIONS} (${ADDITION_EXAMPLES}); and judgement calls, changes that a source supports but that need a choice which the source does not make for you. When the source does not support the change or the instructions do not ask for it, leave the text as it is and say which of these it is in the pull request.`);
+  const bullet = `- whenever you make a judgement call, in that body a \`${JUDGEMENT_HEADING}\` heading that ${LISTING};`;
+  assert.equal(body.split(JUDGEMENT_HEADING).length - 1, 1, "named once");
+  const lines = body.split("\n");
+  const at = lines.indexOf(bullet);
+  assert.ok(at > 0, "the requirement is a bullet of the pull request");
+  assert.ok(lines[at - 1].startsWith("- a body with one entry for each item of the report"), "right after the body of the pull request");
+  assert.ok(lines[at + 1].startsWith("- the last line `Closes #<number>`"), "and before the last line, which stays last");
+});
+
+test("changePolicy: every policy changes step 3 and the pull request requirement of the implementation prompt, and nothing else of it", () => {
+  const sections = (body) => body.split("\n");
+  const reference = sections(renderPolicy("corrections-only").implement.body);
+  for (const policy of CHANGE_POLICIES.slice(1)) {
+    const lines = sections(renderPolicy(policy).implement.body);
+    const changed = lines.filter((line) => !reference.includes(line));
+    assert.ok(changed.every((line) => line.startsWith("3. ") || line.includes(JUDGEMENT_HEADING)), `${policy}: ${changed.map((line) => line.slice(0, 60)).join(" | ")}`);
+    assert.ok(changed.some((line) => line.startsWith("3. ")), policy);
+  }
+});
+
+test("changePolicy: the drift run and the implementation run read one policy: what the report recommends is what step 3 applies, and a ## For a human section exists exactly when a kind is left alone", () => {
+  for (const policy of CHANGE_POLICIES) {
+    const { drift, implement } = renderPolicy(policy);
+    const recommended = bulletOf(drift.body, "## Recommended");
+    const step = stepThree(implement.body);
+    const implementationAppliesAdditions = !/when it is an addition/.test(step);
+    const implementationAppliesJudgement = !/when the right change is a judgement call/.test(step);
+    assert.equal(/addition/.test(recommended), implementationAppliesAdditions, `${policy}: additions are recommended exactly when the implementation applies them`);
+    assert.equal(/judgement call/.test(recommended), implementationAppliesJudgement, `${policy}: judgement calls are recommended exactly when the implementation applies them`);
+    assert.equal(drift.body.includes("`## For a human`: "), !implementationAppliesAdditions || !implementationAppliesJudgement, `${policy}: the section for a human exists when the implementation leaves a kind alone`);
+    assert.equal(drift.body.includes(JUDGEMENT_HEADING), implementationAppliesJudgement, `${policy}: the drift prompt asks for the judgement heading exactly when it applies judgement calls`);
+    assert.equal(implement.body.includes(JUDGEMENT_HEADING), implementationAppliesJudgement, `${policy}: and so does the implementation prompt`);
+  }
+});
+
+test("the implementation prompt leaves ## For a human to a person and opens every source, under every policy", () => {
+  for (const policy of CHANGE_POLICIES) {
+    const { body } = renderPolicy(policy).implement;
+    assert.ok(body.includes("The items under `## For a human` are for a human and not for this workflow, so a report that lists no item under `## Recommended` or `## Could not confirm`, and none of the earlier format (one that only names sources that could not be fetched, or items for a human), gives you nothing to do: call `noop` and stop."), policy);
+    assert.ok(body.includes("Open the source of every `## Recommended` and `## Could not confirm` item before deciding it, and leave an item undecided only on a fetch failure whose error is quoted."), policy);
+    assert.equal(/not done for that reason|you say so/.test(body), false, `${policy}: an unopened source is no reason to leave an item`);
   }
 });

@@ -7,12 +7,12 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import YAML from "yaml";
-import { abs, copyFixture, DRIFT_KEYS, driftWorkflow, fixture, parseWorkflow, readText, renderIn, tempDir } from "./helpers/fixtures.mjs";
+import { abs, copyFixture, DRIFT_KEYS, driftWorkflow, fixture, implementWorkflow, parseWorkflow, readText, renderIn, tempDir } from "./helpers/fixtures.mjs";
 
 const STRATEGIES = ["content-and-docs-sync", "dependency-and-pattern-modernization", "code-quality-and-improvement-scan"];
 const FRAGMENT = (value) => readText(abs("prompts", "drift", `strategy-${value}.md`));
 const GUIDANCE = {
-  "content-and-docs-sync": /Compare the watched-source snapshots with the target's documentation, labs and presentation content/,
+  "content-and-docs-sync": /Compare the watched-source snapshots with the target's documentation, labs and presentation content, and keep them in step with what a corroborated source supports\./,
   "dependency-and-pattern-modernization": /Evaluate the package manifest snapshots for library and framework upgrades and pattern migrations \(for example 17 -> 18\) using the Context7 documentation server/,
   "code-quality-and-improvement-scan": /Scan the target's code for quality improvements and produce suggestions; a project may open them as draft pull requests/,
 };
@@ -60,6 +60,23 @@ test("AC14: the instructions file is rendered unmodified apart from its trailing
     const text = readText(fixture(`strategy-${value}`, "instructions", "fixture.md"));
     assert.ok((await bodyOf(fixture(`strategy-${value}`))).includes(text.replace(/\s+$/, "")), value);
   }
+});
+
+test("AC14: the content-and-docs-sync guidance keeps content in step with what a corroborated source supports and leaves what is applied to the change policy: neither the file, nor the built-in text, nor a committed workflow says to update only what a source contradicts", async () => {
+  const STALE = "update only what a corroborated source contradicts";
+  const CURRENT = "Compare the watched-source snapshots with the target's documentation, labs and presentation content, and keep them in step with what a corroborated source supports.";
+  assert.equal(FRAGMENT("content-and-docs-sync"), `## Upkeep strategy: content-and-docs-sync\n\n${CURRENT}\n`, "the file");
+  const builtIn = await bodyOf(copyFixture("strategy-content-and-docs-sync"));
+  assert.ok(builtIn.includes(CURRENT), "the built-in text of a workspace without prompts/drift/");
+  assert.equal(builtIn.includes(STALE), false);
+  const committed = DRIFT_KEYS.filter((key) => driftWorkflow(key).body.includes("## Upkeep strategy: content-and-docs-sync"));
+  assert.ok(committed.length >= 2, "the preset has projects that use the strategy");
+  for (const key of committed) {
+    assert.ok(driftWorkflow(key).body.includes(CURRENT), `${key}: the committed drift prompt`);
+    assert.equal(driftWorkflow(key).body.includes(STALE), false, `${key}: the committed drift prompt`);
+    assert.equal(implementWorkflow(key).body.includes(STALE), false, `${key}: the committed implementation prompt, which carries the same fragment`);
+  }
+  for (const value of STRATEGIES.filter((strategy) => strategy !== "content-and-docs-sync")) assert.equal(FRAGMENT(value).includes("corroborated source supports"), false, `${value}: only the guidance of the documentation strategy changed`);
 });
 
 test("AC14: the guidance of each strategy that the preset uses is in the committed prompt, and the preset covers two of the three strategies", () => {
