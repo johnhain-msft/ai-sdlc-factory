@@ -41,7 +41,7 @@ export function writeGitFixtureConfig(dir) {
   // does in a deep temp directory; where the temp dir is must not decide whether a test passes
   fs.appendFileSync(
     path.join(dir, ".git", "config"),
-    "\n[user]\n\temail = fixture@example.invalid\n\tname = Fixture\n[core]\n\tautocrlf = false\n\tlongpaths = true\n[commit]\n\tgpgsign = false\n",
+    "\n[user]\n\temail = fixture@example.invalid\n\tname = Fixture\n[core]\n\tautocrlf = false\n\tlongpaths = true\n[commit]\n\tgpgsign = false\n[maintenance]\n\tauto = false\n",
   );
 }
 
