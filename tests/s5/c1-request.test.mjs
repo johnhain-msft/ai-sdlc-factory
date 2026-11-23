@@ -80,7 +80,7 @@ test("AC33: a preset run sends the nine fields and nothing else, in order, to th
     assert.equal(request.pollStateVarPrefix, POLL_STATE_VAR_PREFIX);
     assert.deepEqual(request, {
       ...REFERENCE,
-      manifestPath: path.resolve(scenario.workspace.path("sdlc.yaml")),
+      manifestPath: real(scenario.workspace.path("sdlc.yaml")),
       ghAwVersionPin: REFERENCE.securityBaseline.minGhAwVersion,
     }, "the preset request uses the resolved manifest and the accepted CLI version");
   } finally {

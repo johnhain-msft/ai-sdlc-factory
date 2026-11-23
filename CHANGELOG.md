@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Fixed
+
+- **`sdlc-bootstrap` and `sdlc-onboard` accept a manifest or an `--instructions` file reached through a symbolic link or a Windows 8.3 short path.** They compared the working copy that git reports, which is canonical, with the path as it was given, and refused such a file as outside the repository (`manifest-path-invalid`, or `--instructions … names a file outside the working copy`). Both paths are now resolved to their canonical form first.
+
 ## [0.1.0] - 2026-11-19
 
 The first release: the renderer, the reconciler and the bootstrap and onboarding commands, packaged as an npm dependency that an orchestrator repository installs at a release tag.

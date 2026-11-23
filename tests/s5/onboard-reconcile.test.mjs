@@ -293,7 +293,8 @@ test("the real bin/sdlc-onboard.mjs process with the real S1: exit 0, one JSON d
     const changed = scenario.workspace.status().split("\n").filter(Boolean).map((line) => line.slice(3));
     assert.ok(changed.includes("sdlc.yaml") && changed.includes("instructions/node-app.md"));
     for (const file of changed) assert.ok(file === "sdlc.yaml" || file.startsWith("instructions/") || file.startsWith(".github/"), `unexpected change: ${file}`);
-    const outside = run.trace.filter((event) => event.type === "write" && !path.resolve(event.path).toLowerCase().startsWith(path.resolve(scenario.workspace.root).toLowerCase()) && !/sdlc-s5-trace/.test(event.path));
+    const roots = [path.resolve(scenario.workspace.root), fs.realpathSync.native(scenario.workspace.root)].map((root) => root.toLowerCase());
+    const outside = run.trace.filter((event) => event.type === "write" && !roots.some((root) => path.resolve(event.path).toLowerCase().startsWith(root)) && !/sdlc-s5-trace/.test(event.path));
     assert.deepEqual(outside, [], "no write outside the working copy");
     assert.equal(scenario.fake.requests("POST /repos/:owner/:repo/actions/variables").length, 1);
     assert.deepEqual(scenario.fake.nonGet().map((entry) => entry.method), ["POST"]);

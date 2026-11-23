@@ -3,6 +3,7 @@
 //
 //   node bin/lib/central-repo.mjs [manifest]   prints <owner>/<repo>, exits non-zero without an origin
 
+import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
@@ -47,6 +48,15 @@ function git(directory, args, env) {
   });
 }
 
+/** Resolves symbolic links, junctions and Windows 8.3 short names, as git does for the working copy. */
+const canonical = (target) => {
+  try {
+    return (fs.realpathSync.native ?? fs.realpathSync)(target);
+  } catch {
+    return path.resolve(target);
+  }
+};
+
 /**
  * @param {string} manifestPath path of --manifest (absolute or relative to `cwd`)
  * @param {{ cwd?: string, env?: object }} [options]
@@ -75,7 +85,7 @@ export function resolveCentralRepo(manifestPath, options = {}) {
   if (slug === null) {
     throw new SdlcError(`the origin remote (${redactUrl(url)}) does not name an <owner>/<repo> repository`, { code: "central-repo" });
   }
-  return { slug, ...splitSlug(slug), workingCopy: path.resolve(top.stdout.trim()), manifestPath: absolute };
+  return { slug, ...splitSlug(slug), workingCopy: canonical(top.stdout.trim()), manifestPath: path.join(canonical(directory), path.basename(absolute)) };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

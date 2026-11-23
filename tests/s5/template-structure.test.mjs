@@ -10,6 +10,7 @@ import path from "node:path";
 import test from "node:test";
 import YAML from "yaml";
 import { parseRemoteUrl, resolveCentralRepo } from "../../bin/lib/central-repo.mjs";
+import { workspaceManifestPath } from "../../src/lib/manifest-location.mjs";
 import { renderFleet } from "../../src/reconcile.mjs";
 import { createWorkspace as createFleetWorkspace, referenceRequest } from "../helpers/mini-fleet.mjs";
 import { REPO_ROOT, createWorkspace } from "./helpers/harness.mjs";
@@ -526,7 +527,7 @@ test("the resolver returns owner/repo of the origin remote of the working copy t
     assert.equal(central.slug, "example-owner/example-repo");
     assert.equal(central.owner, "example-owner");
     assert.equal(central.repo, "example-repo");
-    assert.equal(fs.realpathSync(central.workingCopy), fs.realpathSync(workspace.dir));
+    assert.equal(fs.realpathSync.native(central.workingCopy), fs.realpathSync.native(workspace.dir));
   } finally {
     workspace.cleanup();
   }
@@ -537,7 +538,20 @@ test("a manifest in a subdirectory resolves the origin of the enclosing working 
   try {
     const central = resolveCentralRepo("config/fleet.yaml", { cwd: workspace.dir });
     assert.equal(central.slug, "example-owner/example-repo");
-    assert.equal(fs.realpathSync(central.workingCopy), fs.realpathSync(workspace.dir));
+    assert.equal(fs.realpathSync.native(central.workingCopy), fs.realpathSync.native(workspace.dir));
+  } finally {
+    workspace.cleanup();
+  }
+});
+
+test("a manifest reached through a link to the working copy resolves to the canonical working copy", () => {
+  const workspace = createWorkspace({ origin: "https://github.com/example-owner/example-repo.git" });
+  try {
+    const link = path.join(workspace.root, "link");
+    fs.symlinkSync(workspace.dir, link, "junction");
+    const central = resolveCentralRepo("sdlc.yaml", { cwd: link });
+    assert.equal(central.workingCopy, fs.realpathSync.native(workspace.dir));
+    assert.equal(workspaceManifestPath(central.workingCopy, central.manifestPath), "sdlc.yaml");
   } finally {
     workspace.cleanup();
   }

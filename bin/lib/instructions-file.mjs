@@ -135,7 +135,7 @@ function secretFileReason(relative) {
 
 const realPath = (target) => {
   try {
-    return fs.realpathSync(target);
+    return (fs.realpathSync.native ?? fs.realpathSync)(target);
   } catch {
     return path.resolve(target);
   }
@@ -175,7 +175,7 @@ export function readOperatorInstructions(value, cwd, root = cwd) {
     const absolute = path.resolve(cwd, value);
     try {
       if (fs.statSync(absolute).isFile()) {
-        const real = fs.realpathSync(absolute);
+        const real = (fs.realpathSync.native ?? fs.realpathSync)(absolute);
         const relative = path.relative(realPath(root), real);
         if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
           throw new SdlcError(
