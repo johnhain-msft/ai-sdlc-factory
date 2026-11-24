@@ -14,7 +14,7 @@ Your lockfile records the factory as `git+ssh://git@github.com/<owner>/ai-sdlc-f
 2. `package.json` of your orchestrator depends on the factory at a release tag, and the lockfile is committed:
 
    ```json
-   "dependencies": { "ai-sdlc-factory": "github:<owner>/ai-sdlc-factory#v0.1.0" }
+   "dependencies": { "ai-sdlc-factory": "github:<owner>/ai-sdlc-factory#v0.2.0" }
    ```
 
 3. `sdlc.yaml` says where the factory comes from:

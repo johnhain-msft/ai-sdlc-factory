@@ -31,7 +31,7 @@ The factory is not a template to fork. Your orchestrator repository is an ordina
      "name": "my-orchestrator",
      "private": true,
      "dependencies": {
-       "ai-sdlc-factory": "github:<owner>/ai-sdlc-factory#v0.1.0"
+       "ai-sdlc-factory": "github:<owner>/ai-sdlc-factory#v0.2.0"
      }
    }
    ```

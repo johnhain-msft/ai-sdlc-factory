@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0.0 a minor release may break the manifest schema; every break is listed under **Breaking**, with the steps to follow under **Migration**.
 
-## [Unreleased]
+## [0.2.0] - 2026-11-24
 
 The drift, implementation and AI-adaptation agents act on what they find instead of deferring it, and the manifest gains a policy, a model and a sandbox for them. Every new key is optional.
 

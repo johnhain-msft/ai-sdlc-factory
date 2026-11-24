@@ -1,6 +1,6 @@
 {
   "name": "ai-sdlc-factory",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Declarative fleet manifest, security-policy renderer, pipeline reconciler, bootstrap and onboarding CLIs for a gh-aw based AI SDLC orchestrator.",
   "license": "MIT",
