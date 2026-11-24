@@ -435,9 +435,8 @@
           }
         },
         "installDirectories": {
-          "description": "Optional directories of the downstream checkout, relative to its root, in which a cascade workflow runs npm ci --include=dev; defaults to the root only.",
+          "description": "Optional directories of the downstream checkout, relative to its root, in which a cascade workflow runs npm ci --include=dev (pip install -e .[dev] when the edge sets pythonVersion); defaults to the root only. An edge that sets pythonVersion may list none ([]): its downstream has no Python project at its root, and its setupSteps install what the cascade needs.",
           "type": "array",
-          "minItems": 1,
           "uniqueItems": true,
           "items": { "$ref": "#/definitions/relativePath" }
         },
@@ -488,6 +487,13 @@
           "maxLength": 128,
           "pattern": "^[A-Za-z0-9][A-Za-z0-9._/:=-]*$"
         }
+      },
+      "if": {
+        "required": ["pythonVersion"],
+        "properties": { "pythonVersion": { "type": "string" } }
+      },
+      "else": {
+        "properties": { "installDirectories": { "type": "array", "minItems": 1 } }
       }
     },
     "adaptation": {

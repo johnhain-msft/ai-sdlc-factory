@@ -299,7 +299,10 @@ async function listAiamProvenance({ reader, files, warnings, provenanceFiles, pr
   }
 }
 
-/** What an aiam library's governance/upstream-sync.yaml says about the cascade into it: the upstream, the provenance file, the import command and what the cascade may change. */
+/**
+ * What an aiam library's governance/upstream-sync.yaml says about the cascade into it: the upstream, the provenance file, the import command and what the cascade may change.
+ * `installDirectories` is [] when a setup step installs the toolkit and the library holds no Python project at its root, and absent otherwise (the edge keeps its default, the root).
+ */
 async function readAiamCascade({ reader, files, warnings, provenanceFiles, codeownersPath, setupSteps }) {
   const config = await readYamlMapping(reader, AIAM_UPSTREAM_SYNC, warnings);
   if (config === null) return { kind: "instance" };
@@ -308,6 +311,12 @@ async function readAiamCascade({ reader, files, warnings, provenanceFiles, codeo
   const provenanceFile = typeof config.provenance_file === "string" && RELATIVE_PATH.test(config.provenance_file) ? config.provenance_file : null;
   if (provenanceFile === null) warnings.push(`${AIAM_UPSTREAM_SYNC} has no valid provenance_file (a path inside the repository)`);
   else await listAiamProvenance({ reader, files, warnings, provenanceFiles, provenanceFile, upstreamRepo });
+  // The Python setup of a cascade installs the downstream's own project (pip install -e ".[dev]") in every install directory of the edge, the root unless the edge says
+  // otherwise, and that fails in a repository with neither a pyproject.toml nor a setup.py there. A library whose toolkit comes from its `engine` (a setup step installs it)
+  // typically has no project of its own: its edge then lists no install directory, and the cascade runs the setup step alone. Without an engine the toolkit has to be in the
+  // library's own project, so the root install stays. A library that carries a project keeps the root either way.
+  const hasRootProject = files.includes("pyproject.toml") || files.includes("setup.py");
+  const installsOnlyTheToolkit = setupSteps.length > 0 && !hasRootProject;
   return {
     kind: "instance",
     upstreamRepo,
@@ -315,6 +324,7 @@ async function readAiamCascade({ reader, files, warnings, provenanceFiles, codeo
     importCommands: [AIAM_IMPORT_COMMAND],
     allowedFiles: ["assets/**", AIAM_PREFERENCES, codeownersPath, ...(provenanceFile === null ? [] : [provenanceFile])],
     pythonVersion: AIAM_PYTHON_VERSION,
+    ...(installsOnlyTheToolkit ? { installDirectories: [] } : {}),
     setupSteps,
   };
 }

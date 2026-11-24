@@ -14,13 +14,13 @@ import path from "node:path";
 import test from "node:test";
 import Ajv from "ajv";
 import YAML from "yaml";
-import { renderFleet } from "../../src/reconcile.mjs";
+import { reconcile, renderFleet } from "../../src/reconcile.mjs";
 import { parseRemoteUrl } from "../../bin/lib/central-repo.mjs";
 import { inspectRepository, localIdentity, localReader } from "../../bin/lib/inspect-repo.mjs";
 import { resolveMode, resolveStrategy, synthesizeEdge, synthesizeProject } from "../../bin/lib/synthesize.mjs";
 import { createWorkspace as createFleet, referenceRequest } from "../helpers/mini-fleet.mjs";
 import { frontmatterOf } from "../helpers/rendered.mjs";
-import { REPO_ROOT, createScenario, readFixture } from "./helpers/harness.mjs";
+import { CENTRAL, REPO_ROOT, createScenario, readFixture, sha256Tree } from "./helpers/harness.mjs";
 
 const INSTANCE = "example-owner/ai-assets";
 const UPSTREAM = "example-owner/upstream-skills";
@@ -194,7 +194,11 @@ function projectOf(repo, { enabled, strategy, manifests = [], mcp = {}, build = 
   };
 }
 
-function edgeOf({ setupSteps, reviewers = REVIEWERS, provenanceFile = PROVENANCE, codeowners = CODEOWNERS_FILE, upstreamBranch = "main", build = [] } = {}) {
+/**
+ * The edge of the synthetic instance. `installDirectories` is [] when a setup step installs the toolkit, because the instance holds no Python project at its root for the install
+ * of the Python setup to install; null leaves the key out, as for an instance without an engine block or one with a project.
+ */
+function edgeOf({ setupSteps, reviewers = REVIEWERS, provenanceFile = PROVENANCE, codeowners = CODEOWNERS_FILE, upstreamBranch = "main", build = [], installDirectories = setupSteps ? [] : null } = {}) {
   return {
     edgeId: "upstream-skills",
     upstreamRepo: UPSTREAM,
@@ -212,6 +216,7 @@ function edgeOf({ setupSteps, reviewers = REVIEWERS, provenanceFile = PROVENANCE
     branchName: "sdlc/cascade-upstream-skills",
     closeOlderKey: "sdlc-cascade-upstream-skills",
     reviewers,
+    ...(installDirectories === null ? {} : { installDirectories }),
     pythonVersion: "3.12",
     ...(setupSteps ? { setupSteps } : {}),
     importCommands: ["aiam sync-upstream --from <checkout>"],
@@ -237,9 +242,9 @@ const cascadeOf = (edgeChanges) => ({
 
 const EDGE_KEY_ORDER = [
   "edgeId", "upstreamRepo", "upstreamKey", "upstreamSlug", "upstreamDefaultBranch", "initialBaselineSha", "downstreamRepo", "mode", "schedule",
-  "onCommitOnlyAdvance", "stateVariable", "provenanceFile", "provenanceJsonPointer", "branchName", "closeOlderKey", "reviewers", "pythonVersion",
-  "setupSteps", "importCommands", "preflightCommands", "acceptCommands", "buildCommands", "verifyCommands", "adaptationInstructions", "allowedFiles",
-  "protectedFilesExclude", "autoMerge", "immutableGates",
+  "onCommitOnlyAdvance", "stateVariable", "provenanceFile", "provenanceJsonPointer", "branchName", "closeOlderKey", "reviewers", "installDirectories",
+  "pythonVersion", "setupSteps", "importCommands", "preflightCommands", "acceptCommands", "buildCommands", "verifyCommands", "adaptationInstructions",
+  "allowedFiles", "protectedFilesExclude", "autoMerge", "immutableGates",
 ];
 
 /** What `sdlc-onboard --repo <upstream> --downstream <instance>` synthesizes for an instance, with nothing known of the upstream, as `aiam sdlc-preset` prints it. */
@@ -284,6 +289,7 @@ test("aiam instance: governance/policy.yaml marks it, its commands are aiam's, a
       importCommands: ["aiam sync-upstream --from <checkout>"],
       allowedFiles: ["assets/**", "governance/cowork-preferences-source.md", CODEOWNERS_FILE, PROVENANCE],
       pythonVersion: "3.12",
+      installDirectories: [],
       setupSteps: installStep(run),
     },
   });
@@ -322,6 +328,37 @@ test("aiam instance: a pyproject.toml beside the policy neither makes it the too
   assert.deepEqual(inspection.verifyCommands, VERIFY);
   assert.equal(reads.includes("pyproject.toml"), false);
   assert.deepEqual(inspection.packageManifests, ["pyproject.toml"]);
+});
+
+test("aiam instance: its edge lists no install directory when a setup step installs the toolkit and the repository has no Python project at its root, and keeps the root otherwise", async () => {
+  const [engine] = ENGINES.private;
+  const bare = await inspect(instanceFiles({ engine }));
+  assert.deepEqual(bare.aiam.installDirectories, []);
+  assert.deepEqual(bare.warnings, []);
+  for (const [label, [block]] of Object.entries(ENGINES)) {
+    assert.deepEqual((await inspect(instanceFiles({ engine: block }))).aiam.installDirectories, [], `${label} engine`);
+  }
+  for (const extra of [{ "pyproject.toml": "[project]\nname = 'ai-assets'\n" }, { "setup.py": "from setuptools import setup\nsetup()\n" }]) {
+    const own = await inspect(instanceFiles({ engine, extra }));
+    assert.equal(Object.hasOwn(own.aiam, "installDirectories"), false, Object.keys(extra)[0]);
+    assert.deepEqual(own.aiam.setupSteps, bare.aiam.setupSteps, "the toolkit is installed in the same way, with a project or without one");
+  }
+  // A project below the root is not one that an install at the root can install.
+  for (const nested of ["tools/pyproject.toml", "tools/setup.py", "docs/pyproject.toml"]) {
+    const below = await inspect(instanceFiles({ engine, extra: { [nested]: "x" } }));
+    assert.deepEqual(below.aiam.installDirectories, [], nested);
+  }
+  // Without a setup step nothing but the project at the root can bring the toolkit, so the root install stays, with a project or without one (it names the project that is missing).
+  for (const extra of [{}, { "pyproject.toml": "[project]\nname = 'aiam'\n" }]) {
+    const inTree = await inspect(instanceFiles({ extra }));
+    assert.deepEqual(inTree.aiam.setupSteps, []);
+    assert.equal(Object.hasOwn(inTree.aiam, "installDirectories"), false, JSON.stringify(extra));
+  }
+  // An engine block that `aiam reconcile` refuses gives no setup step either (and a warning), so it changes nothing there.
+  for (const [label, invalid] of Object.entries(INVALID_ENGINES)) {
+    const refused = await inspect(instanceFiles({ engine: invalid }));
+    assert.equal(Object.hasOwn(refused.aiam, "installDirectories"), false, label);
+  }
 });
 
 test("aiam instance: a root package.json still supplies the build command, and the instance's own commands replace npm test", async () => {
@@ -487,7 +524,7 @@ test("aiam instance: an upstream-sync.yaml that is not valid, not a mapping, or 
   }
 });
 
-test("aiam instance: an upstream_repository that is not valid is a warning, and nothing else changes: the upstream of an edge is the one that onboarding is given", async () => {
+test("aiam instance: an upstream_repository that is not valid is a warning, and nothing else changes: with no upstream named, the upstream of an edge is the one that onboarding is given", async () => {
   const upstream = await inspect({}, { repo: UPSTREAM, defaultBranch: "main", headSha: null });
   for (const upstream_repository of [7, "not a slug", null]) {
     const inspection = await inspect(instanceFiles({ sync: { upstream_repository } }));
@@ -578,6 +615,39 @@ test("aiam preset: the document validates against sdlc.schema.json in every shap
   assert.equal(presets.length, 7);
 });
 
+test("aiam preset: the edge carries installDirectories as the inspection gives it: [] when a setup step installs the toolkit and there is no project at the root, else none", async () => {
+  const upstream = await inspect({}, { repo: UPSTREAM, defaultBranch: "main", headSha: null });
+  const [engine] = ENGINES.private;
+  const downstream = await inspect(instanceFiles({ engine }));
+  const { edge } = synthesizeEdge({ upstream, downstream });
+  assert.deepEqual(edge.installDirectories, []);
+  edge.installDirectories.push("changed");
+  assert.deepEqual(downstream.aiam.installDirectories, [], "the edge holds its own copy");
+  const own = synthesizeEdge({ upstream, downstream: await inspect(instanceFiles({ engine, extra: { "pyproject.toml": "[project]\nname = 'ai-assets'\n" } })) }).edge;
+  assert.equal(Object.hasOwn(own, "installDirectories"), false);
+  const inTree = synthesizeEdge({ upstream, downstream: await inspect(instanceFiles()) }).edge;
+  assert.equal(Object.hasOwn(inTree, "installDirectories"), false, "no setup step installs the toolkit");
+  const generic = await inspect({ "data/source.json": JSON.stringify({ commit: COMMIT }), ".github/CODEOWNERS": "* @lead-dev\n" });
+  assert.equal(Object.hasOwn(synthesizeEdge({ upstream, downstream: generic }).edge, "installDirectories"), false);
+});
+
+test("aiam preset: sdlc.schema.json lets an edge that sets pythonVersion list no install directory, and still refuses that on an edge that sets up Node", async () => {
+  const [edge] = (await presetOf(await inspect(instanceFiles({ engine: ENGINES.private[0] })))).dependencyEdges;
+  assert.deepEqual(edge.installDirectories, []);
+  const manifestOf = (candidate) => ({ projects: [], dependencyEdges: [candidate] });
+  assertSchemaValid(manifestOf(edge), "a Python edge with none: ");
+  assertSchemaValid(manifestOf({ ...edge, installDirectories: ["."] }), "a Python edge with the root: ");
+  const node = { ...edge };
+  delete node.pythonVersion;
+  delete node.installDirectories;
+  assertSchemaValid(manifestOf(node), "a Node edge with no key: ");
+  assertSchemaValid(manifestOf({ ...node, installDirectories: ["."] }), "a Node edge with the root: ");
+  assert.equal(validate(manifestOf({ ...node, installDirectories: [] })), false, "a Node edge installs dependencies in at least one directory");
+  assert.ok(validate.errors.some((error) => error.keyword === "minItems" && error.instancePath === "/dependencyEdges/0/installDirectories"), JSON.stringify(validate.errors));
+  assert.equal(validate(manifestOf({ ...edge, installDirectories: [".", "."] })), false, "a directory is listed once");
+  assert.equal(validate(manifestOf({ ...edge, installDirectories: "." })), false, "a list, not a string");
+});
+
 test("aiam preset: an instance without an upstream is one enabled project with the strategy that its files give, and no edge", async () => {
   const plain = await presetOf(await inspect(instanceFiles({ sync: false })));
   assert.deepEqual(plain, { projects: [projectOf(INSTANCE, { enabled: true, strategy: "code-quality-and-improvement-scan", verify: VERIFY, reviewers: REVIEWERS })], dependencyEdges: [] });
@@ -590,12 +660,14 @@ test("aiam preset: an instance without an upstream is one enabled project with t
   assert.equal(python.projects[0].driftAudit.upkeepStrategy, "dependency-and-pattern-modernization");
 });
 
-test("aiam preset: the edge has the schema's fields in the order of the factory's own examples, with pythonVersion and setupSteps after the reviewers", async () => {
+test("aiam preset: the edge has the schema's fields in the order of the factory's own examples, with installDirectories, pythonVersion and setupSteps after the reviewers", async () => {
   const [engine] = ENGINES.private;
   const { dependencyEdges } = await presetOf(await inspect(instanceFiles({ engine })));
   assert.deepEqual(Object.keys(dependencyEdges[0]), EDGE_KEY_ORDER);
   const withoutEngine = await presetOf(await inspect(instanceFiles()));
-  assert.deepEqual(Object.keys(withoutEngine.dependencyEdges[0]), EDGE_KEY_ORDER.filter((key) => key !== "setupSteps"));
+  assert.deepEqual(Object.keys(withoutEngine.dependencyEdges[0]), EDGE_KEY_ORDER.filter((key) => key !== "setupSteps" && key !== "installDirectories"));
+  const withProject = await presetOf(await inspect(instanceFiles({ engine, extra: { "pyproject.toml": "[project]\nname = 'ai-assets'\n" } })));
+  assert.deepEqual(Object.keys(withProject.dependencyEdges[0]), EDGE_KEY_ORDER.filter((key) => key !== "installDirectories"));
 });
 
 test("aiam preset: the edge's allowedFiles are the instance's own, and the generic edge keeps the directory of its provenance file", async () => {
@@ -649,6 +721,62 @@ test("aiam preset: a library whose configured provenance file is missing is not 
   assert.deepEqual(synthesizeEdge({ upstream, downstream: generic }).missing, [], "a downstream that is not an aiam library keeps the provenance file that the name scan finds");
 });
 
+test("aiam preset: an upstream other than the one that upstream-sync.yaml names is refused, with or without a head to take a baseline from, and nothing is synthesized from it", async () => {
+  const downstream = await inspect(instanceFiles());
+  assert.equal(downstream.aiam.upstreamRepo, UPSTREAM);
+  assert.deepEqual(downstream.warnings, []);
+  for (const repo of ["example-owner/some-other-repo", "other-owner/upstream-skills", "example-owner/upstream-skills-fork", "example-owner/upstream", "example-owner/ai-assets"]) {
+    for (const headSha of [null, "c".repeat(40)]) {
+      const upstream = await inspect({}, { repo, defaultBranch: "main", headSha });
+      const { edge, missing, notes } = synthesizeEdge({ upstream, downstream, mode: "auto" });
+      assert.equal(edge, null, `${repo} ${headSha}`);
+      assert.deepEqual(missing, [`upstreamRepo (governance/upstream-sync.yaml of ${INSTANCE} names ${UPSTREAM} as its upstream, not ${repo}; onboard ${UPSTREAM}, or correct that file)`], `${repo} ${headSha}`);
+      assert.deepEqual(notes, [], `${repo} ${headSha}`);
+    }
+  }
+  // The mode does not matter: the upstream is wrong whether the edge is mechanical or adapted by an agent.
+  for (const mode of ["mechanical", "ai-adaptation"]) {
+    const { edge, missing } = synthesizeEdge({ upstream: await inspect({}, { repo: "example-owner/some-other-repo", defaultBranch: "main", headSha: null }), downstream, mode });
+    assert.equal(edge, null, mode);
+    assert.equal(missing.length, 1, mode);
+  }
+  // The refusal adds to what else is missing; it does not hide it.
+  const noReviewer = await inspect(instanceFiles({ codeowners: "* @example-owner/platform-team\n" }));
+  const both = synthesizeEdge({ upstream: await inspect({}, { repo: "example-owner/some-other-repo", defaultBranch: "main", headSha: null }), downstream: noReviewer });
+  assert.deepEqual(both.missing.map((entry) => entry.split(" ")[0]), ["upstreamRepo", "reviewers"]);
+});
+
+test("aiam preset: the upstream is compared with the one that upstream-sync.yaml names without regard to case, as GitHub compares repositories", async () => {
+  const downstream = await inspect(instanceFiles());
+  for (const repo of [UPSTREAM, "Example-Owner/Upstream-Skills", "EXAMPLE-OWNER/UPSTREAM-SKILLS"]) {
+    const { edge, missing, notes } = synthesizeEdge({ upstream: await inspect({}, { repo, defaultBranch: "main", headSha: null }), downstream, mode: "auto" });
+    assert.deepEqual(missing, [], repo);
+    assert.deepEqual(notes, [], repo);
+    assert.equal(edge.upstreamRepo, repo, "the edge names the upstream as it was inspected");
+    assert.equal(edge.edgeId, "upstream-skills");
+    assert.equal(edge.initialBaselineSha, COMMIT);
+  }
+  const shouting = "EXAMPLE-OWNER/UPSTREAM-SKILLS";
+  const loud = await inspect(instanceFiles({ sync: { upstream_repository: shouting }, provenance: provenanceDocument({ repository: shouting }) }));
+  assert.equal(loud.aiam.upstreamRepo, shouting);
+  assert.deepEqual(loud.warnings, []);
+  for (const repo of [UPSTREAM, shouting]) {
+    assert.deepEqual(synthesizeEdge({ upstream: await inspect({}, { repo, defaultBranch: "main", headSha: null }), downstream: loud }).missing, [], repo);
+  }
+  assert.equal(synthesizeEdge({ upstream: await inspect({}, { repo: "example-owner/some-other-repo", defaultBranch: "main", headSha: null }), downstream: loud }).edge, null);
+});
+
+test("aiam preset: a downstream that names no upstream, and one that is not an aiam library, take the upstream that onboarding is given", async () => {
+  const upstream = await inspect({}, { repo: "example-owner/some-other-repo", defaultBranch: "main", headSha: null });
+  const generic = await inspect({ "data/source.json": JSON.stringify({ commit: COMMIT }), ".github/CODEOWNERS": "* @lead-dev\n" });
+  const edge = synthesizeEdge({ upstream, downstream: generic }).edge;
+  assert.equal(edge.upstreamRepo, "example-owner/some-other-repo");
+  assert.equal(edge.initialBaselineSha, COMMIT);
+  const unnamed = await inspect(instanceFiles({ sync: { upstream_repository: null } }));
+  assert.equal(unnamed.aiam.upstreamRepo, null);
+  assert.equal(synthesizeEdge({ upstream, downstream: unnamed }).edge.upstreamRepo, "example-owner/some-other-repo");
+});
+
 test("aiam preset: an instance whose team owners are all teams cannot be a downstream: the reviewers are missing, and nothing is invented", async () => {
   const upstream = await inspect({}, { repo: UPSTREAM, defaultBranch: "main", headSha: null });
   const downstream = await inspect(instanceFiles({ codeowners: "* @example-owner/platform-team\n" }));
@@ -688,9 +816,9 @@ test("aiam preset: remote URLs name repositories as `aiam sdlc-preset` reads the
 
 // --- the real renderer and the real onboarding command -----------------------------------------------------------------------
 
-test("aiam cascade: the renderer accepts the edge, sets up Python and the toolkit before the agent starts, and runs the instance's import command", async (t) => {
-  const [engine, run] = ENGINES.private;
-  const preset = await presetOf(await inspect(instanceFiles({ engine })));
+/** The edge that the synthesis builds for the synthetic instance `files`, and the steps that the real renderer writes for it into the workflow of its cascade. */
+async function renderedCascade(t, files) {
+  const preset = await presetOf(await inspect(files));
   // A drift project that is enabled needs instructions and a verify command, which a preset leaves to the operator; the edge is what is under test.
   for (const entry of preset.projects) entry.driftAudit.enabled = false;
   const work = createFleet(t, { manifest: preset });
@@ -698,14 +826,39 @@ test("aiam cascade: the renderer accepts the edge, sets up Python and the toolki
   assert.equal(result.ok, true, JSON.stringify(result.result));
   const file = result.files.get(".github/workflows/cascade-mechanical-upstream-skills.md");
   assert.ok(file, [...result.files.keys()].join("\n"));
-  const { steps } = frontmatterOf(file);
+  return { edge: preset.dependencyEdges[0], steps: frontmatterOf(file).steps, file };
+}
+
+test("aiam cascade: for an instance with no Python project the renderer sets up Python and installs the toolkit before the agent starts, and installs no project that is not there", async (t) => {
+  const [engine, run] = ENGINES.private;
+  const { edge, steps, file } = await renderedCascade(t, instanceFiles({ engine }));
+  assert.deepEqual(edge.installDirectories, []);
   const names = steps.map((step) => step.name);
-  assert.deepEqual(names.slice(0, 3), ["Set up Python 3.12", "Install dependencies (root)", "Install the aiam toolkit"]);
-  const install = steps.find((step) => step.name === "Install the aiam toolkit");
+  assert.deepEqual(names.slice(0, 2), ["Set up Python 3.12", "Install the aiam toolkit"]);
+  // `pip install -e ".[dev]"` of the root fails where there is neither a pyproject.toml nor a setup.py, which is where this instance is: no step may run it.
+  assert.deepEqual(names.filter((name) => name.startsWith("Install dependencies")), []);
+  assert.equal(steps.some((step) => /\bpip install -e\b/.test(step.run ?? "")), false);
+  const install = steps[1];
   assert.equal(install.run, run);
-  assert.equal(install["working-directory"], steps[1]["working-directory"]);
+  assert.equal(install["working-directory"], INSTANCE.split("/")[1]);
   assert.match(file, /aiam sync-upstream --from/);
 });
+
+for (const [label, files, names] of [
+  ["an instance with a pyproject.toml at its root", instanceFiles({ engine: ENGINES.private[0], extra: { "pyproject.toml": "[project]\nname = 'ai-assets'\n" } }), ["Set up Python 3.12", "Install dependencies (root)", "Install the aiam toolkit"]],
+  ["an instance with a setup.py at its root", instanceFiles({ engine: ENGINES.public[0], extra: { "setup.py": "from setuptools import setup\nsetup()\n" } }), ["Set up Python 3.12", "Install dependencies (root)", "Install the aiam toolkit"]],
+  ["an instance that holds the toolkit in its own tree (no engine block, a pyproject.toml)", instanceFiles({ extra: { "pyproject.toml": "[project]\nname = 'aiam'\n" } }), ["Set up Python 3.12", "Install dependencies (root)"]],
+  ["an instance with no engine block and no project, where nothing else can bring the toolkit and the install fails by naming what is missing", instanceFiles(), ["Set up Python 3.12", "Install dependencies (root)"]],
+]) {
+  test(`aiam cascade: the install of the project at the root stays for ${label}`, async (t) => {
+    const { edge, steps } = await renderedCascade(t, files);
+    assert.equal(Object.hasOwn(edge, "installDirectories"), false);
+    assert.deepEqual(steps.map((step) => step.name).slice(0, names.length), names);
+    const root = steps.find((step) => step.name === "Install dependencies (root)");
+    assert.equal(root.run, 'python -m pip install -e ".[dev]"');
+    assert.equal(root["working-directory"], INSTANCE.split("/")[1]);
+  });
+}
 
 test("aiam cascade: sdlc-onboard --repo <upstream> --downstream <instance> writes the edge, with no empty-importCommands note and no package.json warning", async () => {
   const [engine, run] = ENGINES.private;
@@ -746,6 +899,122 @@ test("aiam cascade: an instance with an engine block that is wrong is onboarded 
   }
 });
 
+test("aiam cascade: sdlc-onboard --repo <another repository> --downstream <instance> refuses the edge, says which upstream the instance names, and writes nothing", async () => {
+  const OTHER = "example-owner/some-other-repo";
+  const repo = (id, files) => ({ id, defaultBranch: "main", headSha: "a".repeat(40), files });
+  const scenario = await createScenario({
+    fake: { repos: { [OTHER]: repo(9003, { "README.md": "# another repository\n" }), [UPSTREAM]: repo(9001, { "README.md": "# upstream\n" }), [INSTANCE]: repo(9002, instanceFiles({ engine: ENGINES.private[0] })) } },
+    workspace: { manifest: readFixture("manifest.empty.yaml") },
+  });
+  try {
+    const wrong = await scenario.onboard(["--repo", OTHER, "--downstream", INSTANCE], { env: scenario.env(scenario.appCredentials()) });
+    assert.notEqual(wrong.code, 0);
+    assert.match(wrong.stderr, new RegExp(`the dependency edge ${OTHER} -> ${INSTANCE} cannot be synthesized`));
+    assert.match(wrong.stderr, new RegExp(`  - upstreamRepo \\(governance/upstream-sync\\.yaml of ${INSTANCE} names ${UPSTREAM} as its upstream, not ${OTHER}; onboard ${UPSTREAM}, or correct that file\\)`));
+    assert.match(wrong.stderr, /Nothing was written\./);
+    assert.equal(scenario.workspace.read("sdlc.yaml"), readFixture("manifest.empty.yaml"));
+    assert.equal(scenario.workspace.exists("instructions"), false);
+    assert.equal(scenario.reconcile.calls.length, 0, "the reconciler was not called");
+    assert.deepEqual(scenario.fake.requests("POST /repos/:owner/:repo/actions/variables"), [], "no state variable was seeded from the baseline of another repository");
+    // The upstream that the instance names is onboarded as before, on the same workspace.
+    const right = await scenario.onboard(["--repo", UPSTREAM, "--downstream", INSTANCE], { env: scenario.env(scenario.appCredentials()) });
+    assert.equal(right.code, 0, right.stderr);
+    assert.deepEqual(YAML.parse(scenario.workspace.read("sdlc.yaml")).dependencyEdges.map((edge) => edge.upstreamRepo), [UPSTREAM]);
+  } finally {
+    await scenario.cleanup();
+  }
+});
+
+test("S4 QA R2: toolkit-only onboarding persists the empty install list through real reconciliation and a second invocation", async () => {
+  const [engine, run] = ENGINES.private;
+  const repo = (id, files) => ({ id, defaultBranch: "main", headSha: "a".repeat(40), files });
+  const scenario = await createScenario({
+    fake: {
+      repos: {
+        [UPSTREAM]: repo(9001, { "package.json": JSON.stringify({ scripts: { test: "node --test" } }) }),
+        [INSTANCE]: repo(9002, instanceFiles({ engine })),
+      },
+    },
+    workspace: { manifest: readFixture("manifest.empty.yaml") },
+  });
+  try {
+    const argv = ["--repo", UPSTREAM, "--downstream", INSTANCE];
+    const options = { env: scenario.env(scenario.appCredentials()), reconcile };
+    const first = await scenario.onboard(argv, options);
+    assert.equal(first.code, 0, first.stderr);
+    const manifestText = scenario.workspace.read("sdlc.yaml");
+    const manifest = YAML.parse(manifestText);
+    assertSchemaValid(manifest);
+    assert.deepEqual(manifest.dependencyEdges, [edgeOf({ setupSteps: installStep(run) })]);
+
+    const sourcePath = ".github/workflows/cascade-mechanical-upstream-skills.md";
+    const lockPath = ".github/workflows/cascade-mechanical-upstream-skills.lock.yml";
+    assert.equal(scenario.workspace.exists(sourcePath), true, "the reconciler wrote the cascade, not just a success report");
+    assert.equal(scenario.workspace.exists(lockPath), true, "the test compiler wrote the lock artifact");
+    const source = scenario.workspace.read(sourcePath);
+    const lock = scenario.workspace.read(lockPath);
+    const steps = frontmatterOf(source).steps;
+    assert.deepEqual(steps.slice(0, 2).map((step) => step.name), ["Set up Python 3.12", "Install the aiam toolkit"]);
+    assert.equal(steps[1].run, run);
+    assert.equal(steps[1]["working-directory"], "ai-assets");
+    assert.equal(steps.some((step) => /\bpip install -e\b/.test(step.run ?? "")), false, "no install of a nonexistent root project reaches the workflow");
+    assert.match(lock, /# sha256:/);
+
+    const stateName = "SDLC_SYNC_STATE_UPSTREAM_SKILLS";
+    const stateText = scenario.fake.variablesOf(CENTRAL)[stateName];
+    const state = JSON.parse(stateText);
+    assert.equal(state.lastMergedUpstreamSha, COMMIT, "the downstream's recorded commit, not upstream HEAD, seeds state");
+    assert.equal(state.lastObservedHeadSha, COMMIT);
+    assert.equal(scenario.fake.requests("POST /repos/:owner/:repo/actions/variables").length, 1);
+
+    const second = await scenario.onboard(argv, options);
+    assert.equal(second.code, 0, second.stderr);
+    assert.equal(scenario.workspace.read("sdlc.yaml"), manifestText, "the second invocation preserves the explicit [] in YAML");
+    assert.equal(scenario.workspace.read(sourcePath), source);
+    assert.equal(scenario.workspace.read(lockPath), lock);
+    assert.equal(scenario.fake.variablesOf(CENTRAL)[stateName], stateText, "existing state is not reset");
+    assert.equal(scenario.fake.requests("POST /repos/:owner/:repo/actions/variables").length, 1);
+    assert.equal(scenario.fake.requests("PATCH /repos/:owner/:repo/actions/variables/:name").length, 0);
+  } finally {
+    await scenario.cleanup();
+  }
+});
+
+test("S4 QA R2: an upstream mismatch leaves an existing fleet, instructions and all sync state untouched", async () => {
+  const existing = cascadeOf({ setupSteps: installStep(PRIVATE_INSTALL) });
+  existing.projects[0].driftAudit.enabled = false;
+  const repo = (id, files) => ({ id, defaultBranch: "main", headSha: "a".repeat(40), files });
+  const scenario = await createScenario({
+    fake: {
+      repos: {
+        "example-owner/aiam": repo(9003, { "pyproject.toml": '[project]\nname = "aiam"\n' }),
+        [INSTANCE]: repo(9002, instanceFiles({ engine: ENGINES.private[0] })),
+      },
+    },
+    workspace: {
+      manifest: YAML.stringify(existing),
+      files: { "instructions/upstream-skills.md": "# Keep the operator's instructions\n" },
+    },
+  });
+  try {
+    const stateName = "SDLC_SYNC_STATE_UPSTREAM_SKILLS";
+    const stateText = JSON.stringify({ lastMergedUpstreamSha: COMMIT, lastObservedHeadSha: COMMIT });
+    scenario.fake.setVariable(CENTRAL, stateName, stateText);
+    const before = sha256Tree(scenario.workspace.dir);
+    const variablesBefore = scenario.fake.variablesOf(CENTRAL);
+    const result = await scenario.onboard(["--repo", "example-owner/aiam", "--downstream", INSTANCE], { env: scenario.env(scenario.appCredentials()) });
+    assert.notEqual(result.code, 0, result.stderr);
+    assert.match(result.stderr, /upstreamRepo .*names example-owner\/upstream-skills as its upstream, not example-owner\/aiam/);
+    assert.equal(sha256Tree(scenario.workspace.dir), before, "the existing manifest, instructions and git metadata are byte-for-byte unchanged");
+    assert.equal(scenario.workspace.exists("instructions/aiam.md"), false);
+    assert.deepEqual(scenario.fake.variablesOf(CENTRAL), variablesBefore, "the existing baseline is unchanged and no other edge was seeded");
+    assert.equal(scenario.reconcile.calls.length, 0);
+    assert.deepEqual(scenario.fake.log.filter((request) => request.method !== "GET"), [], "refusal happens before every remote write");
+  } finally {
+    await scenario.cleanup();
+  }
+});
+
 // --- parity with `aiam sdlc-preset` ------------------------------------------------------------------------------------------
 
 const AIAM_SRC = process.env.AIAM_SRC;
@@ -758,6 +1027,8 @@ test("aiam parity: `aiam sdlc-preset` prints the objects that this synthesis bui
     "pypi engine": instanceFiles({ engine: ENGINES.pypi[0] }),
     "no engine": instanceFiles(),
     "no upstream": instanceFiles({ engine: ENGINES.private[0], sync: false }),
+    "an engine and a pyproject.toml at its root": instanceFiles({ engine: ENGINES.private[0], extra: { "pyproject.toml": "[project]\nname = 'ai-assets'\n" } }),
+    "an engine and a setup.py at its root": instanceFiles({ engine: ENGINES.public[0], extra: { "setup.py": "from setuptools import setup\nsetup()\n" } }),
     "manifests and a build script": instanceFiles({ extra: { "package.json": JSON.stringify({ scripts: { build: "tsc" } }), "pyproject.toml": "[project]\nname = 'x'\n", "tools/go.mod": "module example.com/tools\n" } }),
     "a custom CODEOWNERS path and provenance file": instanceFiles({ sync: { provenance_file: "governance/sync/provenance.json" }, policy: { codeowners_path: "docs/CODEOWNERS" }, codeowners: null, extra: { "docs/CODEOWNERS": "* @docs-owner\n" } }),
     "a conventional provenance name and no upstream": instanceFiles({ sync: false, extra: { "vendor/source.json": JSON.stringify({ commit: COMMIT }) } }),
@@ -770,7 +1041,11 @@ test("aiam parity: `aiam sdlc-preset` prints the objects that this synthesis bui
     const expected = await presetOf(await inspectRepository(localReader(dir), { repo, defaultBranch, headSha: null }));
     const ran = spawnSync(PYTHON, ["-m", "aiam", "--root", dir, "sdlc-preset"], { encoding: "utf8", env: { ...process.env, PYTHONPATH: AIAM_SRC, PYTHONIOENCODING: "utf-8" } });
     assert.equal(ran.status, 0, `${label}: ${ran.stderr}`);
-    assert.deepEqual(JSON.parse(ran.stdout), expected, label);
-    assertSchemaValid(JSON.parse(ran.stdout), `${label}: `);
+    const printed = JSON.parse(ran.stdout);
+    // The one field that the port in sdlc_preset.py has to follow the inspection for (readAiamCascade in bin/lib/inspect-repo.mjs): the edge of an instance whose toolkit a setup step
+    // installs, and that has no Python project at its root, has `installDirectories: []`, or the cascade that the edge describes fails at the install of a project that is not there.
+    assert.deepEqual(printed.dependencyEdges.map((edge) => edge.installDirectories), expected.dependencyEdges.map((edge) => edge.installDirectories), `${label}: installDirectories of the edge`);
+    assert.deepEqual(printed, expected, label);
+    assertSchemaValid(printed, `${label}: `);
   }
 });
