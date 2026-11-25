@@ -2,6 +2,11 @@
 // The target is never modified and no script of it is ever run. The inspection collects the language manifests,
 // the workflow files (which of them declare a schedule trigger), the test and build scripts of the root package.json,
 // the provenance files and the owners of .github/CODEOWNERS.
+//
+// An aiam repository is inspected first-class. A library that uses the aiam toolkit (its governance/policy.yaml is the marker) is verified with
+// the toolkit's own commands, names the upstream that it imports in governance/upstream-sync.yaml and keeps that upstream's commit in the
+// provenance file that the file names; the toolkit itself (a pyproject.toml that declares the package aiam) is verified with its tests. What the
+// inspection finds is `aiam` on the result, and `aiam sdlc-preset` of the toolkit prints the document that the synthesis builds from it.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -36,6 +41,26 @@ const MAX_DEPTH = 10;
 const MAX_FILE_BYTES = 1024 * 1024;
 const SHA = /^[0-9a-f]{40}$/;
 const NPM_PLACEHOLDER_TEST = /no test specified/i;
+
+const AIAM_POLICY = "governance/policy.yaml";
+const AIAM_UPSTREAM_SYNC = "governance/upstream-sync.yaml";
+const AIAM_PREFERENCES = "governance/cowork-preferences-source.md";
+const AIAM_PROVENANCE_FORMAT = "aiam-upstream/1";
+const AIAM_INSTANCE_VERIFY = Object.freeze(["aiam validate", "aiam governance codeowners"]);
+const AIAM_TOOLKIT_VERIFY = Object.freeze(["python -m pytest -q"]);
+const AIAM_IMPORT_COMMAND = "aiam sync-upstream --from <checkout>";
+const AIAM_PYTHON_VERSION = "3.12";
+const AIAM_INSTALL_STEP = "Install the aiam toolkit";
+const AIAM_PACKAGE_DECLARATION = /^\s*name\s*=\s*["']aiam["']/m;
+const DEFAULT_CODEOWNERS = ".github/CODEOWNERS";
+/** The `path` of the upstream-sync schema of the toolkit: a relative path that stays inside the repository. */
+const RELATIVE_PATH = /^(?!\/)(?![A-Za-z]:)(?!.*(?:^|\/)\.\.(?:\/|$))[^\\\u0000-\u001f]+$/;
+const ENGINE_KEYS = ["package", "source", "ref", "private"];
+const ENGINE_PACKAGE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const ENGINE_GITHUB_SOURCE = /^github:([A-Za-z0-9][A-Za-z0-9-]*)\/((?!\.{1,2}$)[A-Za-z0-9._-]+)$/;
+// The allow-lists that `aiam reconcile` applies to the same block: the values end up in a shell command and a pip URL.
+const ENGINE_GIT_REF = /^(?!\.)(?!.*\.\.)(?!.*\/\/)[A-Za-z0-9_][A-Za-z0-9._+\/-]*$/;
+const ENGINE_PYPI_VERSION = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/;
 
 const basename = (file) => file.slice(file.lastIndexOf("/") + 1);
 
@@ -172,6 +197,138 @@ function declaresSchedule(text, file) {
   return on !== null && typeof on === "object" && "schedule" in on;
 }
 
+const isMapping = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+
+/** The mapping that a YAML file of the repository holds; null, with the reason in `warnings`, when it is unreadable, not YAML or not a mapping. */
+async function readYamlMapping(reader, file, warnings) {
+  const text = await reader.read(file);
+  if (text === null) {
+    warnings.push(`${file} could not be read`);
+    return null;
+  }
+  let value;
+  try {
+    value = YAML.parse(text, { maxAliasCount: 100, logLevel: "error" });
+  } catch {
+    warnings.push(`${file} is not valid YAML`);
+    return null;
+  }
+  if (!isMapping(value)) {
+    warnings.push(`${file} is not a YAML mapping`);
+    return null;
+  }
+  return value;
+}
+
+/** Where the generated CODEOWNERS file of an aiam library is: the `codeowners_path` of its policy, relative to the root, or .github/CODEOWNERS. */
+function codeownersPathOf(policy) {
+  const configured = typeof policy.codeowners_path === "string" ? policy.codeowners_path.trim().replace(/^\/+/, "") : "";
+  return configured === "" ? DEFAULT_CODEOWNERS : configured;
+}
+
+/**
+ * The `setupSteps` that install the toolkit in a cascade workflow, from the `engine` block of a policy: { steps } for a policy that has no block or
+ * one that `aiam reconcile` accepts, { steps: [], problem } for one that it would refuse. A problem never quotes the block, because a warning travels to a log.
+ *
+ * A private engine is installed through three `url.<base>.insteadOf` rewrites that carry ${GH_TOKEN}, set through GIT_CONFIG_COUNT in the environment of that one
+ * command. The token is the plain shell variable and never an Actions expression: a manifest string must not hold the expression opener.
+ */
+function engineSetupSteps(policy) {
+  if (!Object.hasOwn(policy, "engine")) return { steps: [] };
+  const engine = policy.engine;
+  const problem = (text) => ({ steps: [], problem: text });
+  if (!isMapping(engine)) return problem("engine must be a mapping with package, source, ref and private");
+  if (Object.keys(engine).some((key) => !ENGINE_KEYS.includes(key))) return problem("engine has a key other than package, source, ref and private");
+  const packageName = Object.hasOwn(engine, "package") ? engine.package : "aiam";
+  const isPrivate = Object.hasOwn(engine, "private") ? engine.private : false;
+  const { source, ref } = engine;
+  if (typeof packageName !== "string" || !ENGINE_PACKAGE.test(packageName)) return problem("engine.package must be a package name of letters, digits, '.', '_' and '-'");
+  if (source === undefined || source === null) return problem("engine.source is required: 'pypi' or 'github:<owner>/<repo>'");
+  const github = typeof source === "string" ? ENGINE_GITHUB_SOURCE.exec(source) : null;
+  if (typeof source !== "string" || !(source === "pypi" || github) || source.endsWith(".git")) {
+    return problem("engine.source must be 'pypi' or 'github:<owner>/<repo>' without a '.git' suffix");
+  }
+  if (ref === undefined || ref === null) return problem("engine.ref is required: a tag, branch or commit SHA (a version for pypi)");
+  if (typeof ref !== "string" || !(source === "pypi" ? ENGINE_PYPI_VERSION : ENGINE_GIT_REF).test(ref)) {
+    return problem(`engine.ref must be ${source === "pypi" ? "a version" : "a tag, branch or commit SHA"}, a quoted string without whitespace or shell metacharacters`);
+  }
+  if (typeof isPrivate !== "boolean") return problem("engine.private must be true or false");
+  if (isPrivate && github === null) return problem("engine.private needs a github:<owner>/<repo> source; a PyPI package has no repository to read with a token");
+
+  const slug = github === null ? null : `${github[1]}/${github[2]}`;
+  const requirement = github === null ? `${packageName}==${ref}` : `${packageName} @ git+https://github.com/${slug}.git@${ref}`;
+  const install = `python -m pip install --quiet "${requirement}"`;
+  if (!isPrivate) return { steps: [{ name: AIAM_INSTALL_STEP, run: install }] };
+  const token = "${GH_TOKEN}"; // a plain string: the shell, not a template literal, expands it
+  const rewrite = `url.https://x-access-token:${token}@github.com/${slug}.insteadOf`;
+  const prefixes = [`ssh://git@github.com/${slug}`, `git@github.com:${slug}`, `https://github.com/${slug}`];
+  const assignments = ["GIT_TERMINAL_PROMPT=0", `GIT_CONFIG_COUNT=${prefixes.length}`];
+  prefixes.forEach((prefix, index) => assignments.push(`GIT_CONFIG_KEY_${index}="${rewrite}"`, `GIT_CONFIG_VALUE_${index}="${prefix}"`));
+  return { steps: [{ name: AIAM_INSTALL_STEP, run: [...assignments, install].join(" ") }] };
+}
+
+/** Lists the provenance file that governance/upstream-sync.yaml names, unless the name scan listed it already, and warns about a file that is not an aiam one. */
+async function listAiamProvenance({ reader, files, warnings, provenanceFiles, provenanceFile, upstreamRepo }) {
+  if (!files.includes(provenanceFile)) {
+    warnings.push(`${AIAM_UPSTREAM_SYNC} names the provenance file ${provenanceFile}, which the repository does not contain; run aiam sync-upstream once to create it`);
+    return;
+  }
+  const listed = provenanceFiles.some((entry) => entry.path === provenanceFile);
+  const text = await reader.read(provenanceFile);
+  let document;
+  let found = null;
+  if (text === null) {
+    if (!listed) warnings.push(`${provenanceFile} could not be read`);
+  } else {
+    try {
+      document = JSON.parse(text);
+      found = findCommitPointer(document);
+    } catch {
+      if (!listed) warnings.push(`${provenanceFile} is not valid JSON`);
+    }
+  }
+  if (!listed) {
+    provenanceFiles.push({ path: provenanceFile, commit: found?.commit ?? null, pointer: found?.pointer ?? null });
+    provenanceFiles.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  }
+  if (document === undefined) return;
+  if (!isMapping(document) || document.format !== AIAM_PROVENANCE_FORMAT) {
+    warnings.push(`${provenanceFile} is not an aiam upstream provenance file (format "${AIAM_PROVENANCE_FORMAT}")`);
+  } else if (upstreamRepo !== null && document.repository !== upstreamRepo) {
+    warnings.push(`${provenanceFile} records another repository than the upstream_repository of ${AIAM_UPSTREAM_SYNC}`);
+  }
+}
+
+/**
+ * What an aiam library's governance/upstream-sync.yaml says about the cascade into it: the upstream, the provenance file, the import command and what the cascade may change.
+ * `installDirectories` is [] when a setup step installs the toolkit and the library holds no Python project at its root, and absent otherwise (the edge keeps its default, the root).
+ */
+async function readAiamCascade({ reader, files, warnings, provenanceFiles, codeownersPath, setupSteps }) {
+  const config = await readYamlMapping(reader, AIAM_UPSTREAM_SYNC, warnings);
+  if (config === null) return { kind: "instance" };
+  const upstreamRepo = isRepoSlug(config.upstream_repository) ? config.upstream_repository : null;
+  if (upstreamRepo === null) warnings.push(`${AIAM_UPSTREAM_SYNC} has no valid upstream_repository (an <owner>/<repo> repository)`);
+  const provenanceFile = typeof config.provenance_file === "string" && RELATIVE_PATH.test(config.provenance_file) ? config.provenance_file : null;
+  if (provenanceFile === null) warnings.push(`${AIAM_UPSTREAM_SYNC} has no valid provenance_file (a path inside the repository)`);
+  else await listAiamProvenance({ reader, files, warnings, provenanceFiles, provenanceFile, upstreamRepo });
+  // The Python setup of a cascade installs the downstream's own project (pip install -e ".[dev]") in every install directory of the edge, the root unless the edge says
+  // otherwise, and that fails in a repository with neither a pyproject.toml nor a setup.py there. A library whose toolkit comes from its `engine` (a setup step installs it)
+  // typically has no project of its own: its edge then lists no install directory, and the cascade runs the setup step alone. Without an engine the toolkit has to be in the
+  // library's own project, so the root install stays. A library that carries a project keeps the root either way.
+  const hasRootProject = files.includes("pyproject.toml") || files.includes("setup.py");
+  const installsOnlyTheToolkit = setupSteps.length > 0 && !hasRootProject;
+  return {
+    kind: "instance",
+    upstreamRepo,
+    provenanceFile,
+    importCommands: [AIAM_IMPORT_COMMAND],
+    allowedFiles: ["assets/**", AIAM_PREFERENCES, codeownersPath, ...(provenanceFile === null ? [] : [provenanceFile])],
+    pythonVersion: AIAM_PYTHON_VERSION,
+    ...(installsOnlyTheToolkit ? { installDirectories: [] } : {}),
+    setupSteps,
+  };
+}
+
 /**
  * @param {{ list(): string[], read(path: string): Promise<string|null> }} reader
  * @param {{ repo: string, defaultBranch: string, headSha: string|null }} identity
@@ -198,7 +355,30 @@ export async function inspectRepository(reader, identity, { provenanceNames = DE
     }
   }
   const buildCommands = scriptNames.includes("build") ? ["npm run build"] : [];
-  const verifyCommands = scriptNames.includes("test") ? ["npm test"] : [];
+  let verifyCommands = scriptNames.includes("test") ? ["npm test"] : [];
+
+  // An aiam library (its policy is the marker) is verified with the toolkit's commands, and its policy says where its CODEOWNERS file is and how the toolkit is
+  // installed. The toolkit itself has no policy, and declares its package in a pyproject.toml. Neither is a reason to warn that there is no package.json.
+  let aiam = null;
+  let codeownersPath = DEFAULT_CODEOWNERS;
+  let engineSteps = [];
+  if (files.includes(AIAM_POLICY)) {
+    verifyCommands = [...AIAM_INSTANCE_VERIFY];
+    aiam = { kind: "instance" };
+    const policy = await readYamlMapping(reader, AIAM_POLICY, warnings);
+    if (policy !== null) {
+      codeownersPath = codeownersPathOf(policy);
+      const engine = engineSetupSteps(policy);
+      if (engine.problem !== undefined) warnings.push(`${AIAM_POLICY}: ${engine.problem}; no step that installs the toolkit was synthesized`);
+      else engineSteps = engine.steps;
+    }
+  } else if (files.includes("pyproject.toml")) {
+    const pyproject = await reader.read("pyproject.toml");
+    if (pyproject !== null && AIAM_PACKAGE_DECLARATION.test(pyproject)) {
+      verifyCommands = [...AIAM_TOOLKIT_VERIFY];
+      aiam = { kind: "engine" };
+    }
+  }
   if (verifyCommands.length === 0) {
     warnings.push(
       rootPackage === null
@@ -232,7 +412,11 @@ export async function inspectRepository(reader, identity, { provenanceNames = DE
     provenanceFiles.push({ path: file, commit, pointer });
   }
 
-  const codeownersText = files.includes(".github/CODEOWNERS") ? await reader.read(".github/CODEOWNERS") : null;
+  if (aiam?.kind === "instance" && files.includes(AIAM_UPSTREAM_SYNC)) {
+    aiam = await readAiamCascade({ reader, files, warnings, provenanceFiles, codeownersPath, setupSteps: engineSteps });
+  }
+
+  const codeownersText = files.includes(codeownersPath) ? await reader.read(codeownersPath) : null;
   const codeowners =
     codeownersText === null
       ? { present: false, individuals: [], teams: [] }
@@ -251,6 +435,7 @@ export async function inspectRepository(reader, identity, { provenanceNames = DE
     provenanceFiles,
     codeowners,
     warnings,
+    ...(aiam === null ? {} : { aiam }),
   };
 }
 

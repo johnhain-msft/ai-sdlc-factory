@@ -57,10 +57,13 @@ export function synthesizeProject({ inspection, strategy, watchUrls = [], schedu
   };
 }
 
-/** `--mode auto` resolves to mechanical when the downstream manifest has exactly one script named import:*, else to ai-adaptation. */
+/**
+ * `--mode auto` resolves to mechanical when the downstream manifest has exactly one script named import:*, or when the downstream is an aiam library that
+ * carries its own import command (`aiam sync-upstream`); else to ai-adaptation.
+ */
 export function resolveMode(requested, downstream) {
   if (requested !== "auto") return requested;
-  return downstream.importScripts.length === 1 ? "mechanical" : "ai-adaptation";
+  return downstream.importScripts.length === 1 || (downstream.aiam?.importCommands?.length ?? 0) > 0 ? "mechanical" : "ai-adaptation";
 }
 
 /** The glob that bounds what the cascade may edit: the provenance file's directory, or the file itself at the repository root. */
@@ -88,6 +91,22 @@ export function synthesizeEdge({ upstream, downstream, mode: requestedMode }) {
   } else if (provenance.pointer === null) {
     missing.push(`provenanceJsonPointer (${provenance.path} holds no 40-hex "commit" key)`);
   }
+  // An aiam library names its provenance file in governance/upstream-sync.yaml, and the allowedFiles of its edge come from that name: an edge that tracked another
+  // file (one that the name scan took for a provenance file) would disagree with them, so it is not synthesized.
+  const named = downstream.aiam?.provenanceFile;
+  if (typeof named === "string" && provenance !== null && provenance.path !== named) {
+    missing.push(`provenanceFile (${named}, the provenance_file of governance/upstream-sync.yaml, is not in ${downstream.repo}; ${provenance.path} cannot stand in for it)`);
+  }
+  // The same file names the upstream that the library imports, and the commit in its provenance file belongs to that repository. An edge from any other repository (a typo,
+  // a fork, a renamed upstream) would take that commit as its baseline in a repository that does not hold it, and would import what the library's own configuration does not
+  // name, so it is not synthesized either. GitHub compares repository names without regard to case, and so does this. A library whose file names no valid upstream has
+  // nothing to compare with (the inspection warned about it), and the upstream is the one that onboarding is given.
+  const namedUpstream = downstream.aiam?.upstreamRepo;
+  if (typeof namedUpstream === "string" && namedUpstream.toLowerCase() !== upstream.repo.toLowerCase()) {
+    missing.push(
+      `upstreamRepo (governance/upstream-sync.yaml of ${downstream.repo} names ${namedUpstream} as its upstream, not ${upstream.repo}; onboard ${namedUpstream}, or correct that file)`,
+    );
+  }
 
   let initialBaselineSha = null;
   let baselineSource = "";
@@ -106,7 +125,11 @@ export function synthesizeEdge({ upstream, downstream, mode: requestedMode }) {
     missing.push(`reviewers (no individual owner in .github/CODEOWNERS of ${downstream.repo}; a team cannot be requested as a reviewer)`);
   }
   const mode = resolveMode(requestedMode, downstream);
-  if (mode === "mechanical") notes.push("importCommands is empty: add the command that imports the upstream into the downstream to sdlc.yaml");
+  // An aiam library names its import command, the files that the cascade may change, how the toolkit is installed and whether the cascade installs a project of the library
+  // besides it (the inspection read them from its policy, its upstream-sync.yaml and its file list); every other downstream has no import command, and the edge's
+  // allowedFiles are the directory of its provenance file.
+  const importCommands = downstream.aiam?.importCommands ? [...downstream.aiam.importCommands] : [];
+  if (mode === "mechanical" && importCommands.length === 0) notes.push("importCommands is empty: add the command that imports the upstream into the downstream to sdlc.yaml");
 
   if (missing.length > 0) return { edge: null, missing, baselineSource, notes };
   return {
@@ -127,13 +150,18 @@ export function synthesizeEdge({ upstream, downstream, mode: requestedMode }) {
       branchName: `sdlc/cascade-${upstreamKey}`,
       closeOlderKey: `sdlc-cascade-${upstreamKey}`,
       reviewers,
-      importCommands: [],
+      // [] (not absent) when a setup step installs the toolkit and the library has no Python project at its root: the Python setup of a cascade runs `pip install -e ".[dev]"` in
+      // every install directory of the edge, and that fails where there is no project to install. The port in `aiam sdlc-preset` (sdlc_preset.py) has to give the same field.
+      ...(downstream.aiam?.installDirectories ? { installDirectories: [...downstream.aiam.installDirectories] } : {}),
+      ...(downstream.aiam?.pythonVersion ? { pythonVersion: downstream.aiam.pythonVersion } : {}),
+      ...(downstream.aiam?.setupSteps?.length ? { setupSteps: downstream.aiam.setupSteps.map((step) => ({ ...step })) } : {}),
+      importCommands,
       preflightCommands: [],
       acceptCommands: [],
       buildCommands: [...downstream.buildCommands],
       verifyCommands: [...downstream.verifyCommands],
       adaptationInstructions: "",
-      allowedFiles: allowedFilesFor(provenance.path),
+      allowedFiles: downstream.aiam?.allowedFiles ? [...downstream.aiam.allowedFiles] : allowedFilesFor(provenance.path),
       protectedFilesExclude: [],
       autoMerge: false,
       immutableGates: { zeroDiffPaths: [] },
